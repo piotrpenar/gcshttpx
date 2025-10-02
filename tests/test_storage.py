@@ -3,7 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from gcs_httpx.storage import Blob, Storage
+from gcshttpx.storage import Blob, Storage
 
 
 def make_client(handler: httpx.MockTransport) -> httpx.AsyncClient:

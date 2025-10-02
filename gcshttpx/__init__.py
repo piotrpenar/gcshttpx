@@ -1,5 +1,5 @@
 """
-gcs_httpx: Minimal async Google Cloud Storage + Auth client on httpx (HTTP/2).
+gcshttpx: Minimal async Google Cloud Storage + Auth client on httpx (HTTP/2).
 """
 
 from .auth import AioSession, IamClient, Token, Type, decode, encode

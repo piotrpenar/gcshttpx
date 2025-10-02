@@ -13,7 +13,7 @@ dev-dependencies = [
 
 [project]
 name = "gcshttpx"
-version = "0.1.1"
+version = "0.1.2"
 description = "Minimal async Google Cloud Storage + Auth client built on httpx (HTTP/2)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,7 +54,7 @@ Source = "https://github.com/piotrpenar/gcshttpx"
 Issues = "https://github.com/piotrpenar/gcshttpx/issues"
 
 [tool.hatch.build]
-packages = ["gcs_httpx"]
+packages = ["gcshttpx"]
 
 [tool.pytest.ini_options]
 addopts = "-q --maxfail=1 --disable-warnings"

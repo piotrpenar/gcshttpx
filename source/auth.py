@@ -11,13 +11,13 @@ import datetime
 import enum
 import os
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import IO, Any, AnyStr
+from typing import Any, AnyStr, Dict, IO, List, Mapping, Optional, Union
 
 import httpx
 import jwt
 import orjson
+
 
 # Public exports
 __all__ = [
@@ -33,7 +33,7 @@ __all__ = [
 # Session wrapper
 Response = httpx.Response
 Session = httpx.AsyncClient
-Timeout = httpx.Timeout | float
+Timeout = Union[httpx.Timeout, float]
 
 
 async def _raise_for_status(resp: httpx.Response) -> None:
@@ -47,7 +47,7 @@ async def _raise_for_status(resp: httpx.Response) -> None:
 class AioSession:
     def __init__(
         self,
-        session: Session | None = None,
+        session: Optional[Session] = None,
         *,
         timeout: Timeout = 10,
         verify_ssl: bool = True,
@@ -79,8 +79,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
-        params: Mapping[str, int | str] | None = None,
+        headers: Optional[Mapping[str, str]] = None,
+        params: Optional[Mapping[str, Union[int, str]]] = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -93,21 +93,13 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
-        data: bytes | str | dict | IO[AnyStr] | None = None,
-        params: Mapping[str, int | str] | None = None,
+        headers: Optional[Mapping[str, str]] = None,
+        data: Optional[Union[bytes, str, IO[AnyStr]]] = None,
+        params: Optional[Mapping[str, Union[int, str]]] = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
             timeout = httpx.Timeout(timeout)
-        # Use 'data' for form data (dict), 'content' for raw bytes/str
-        if isinstance(data, dict):
-            return await self.request(
-                "POST", url, headers=headers, params=params, data=data, timeout=timeout
-            )
-        # Convert IO objects to bytes for httpx AsyncClient compatibility
-        if hasattr(data, "read"):
-            data = data.read()  # type: ignore
         return await self.request(
             "POST", url, headers=headers, params=params, content=data, timeout=timeout
         )
@@ -116,9 +108,9 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
-        data: bytes | str | None = None,
-        params: Mapping[str, int | str] | None = None,
+        headers: Optional[Mapping[str, str]] = None,
+        data: Optional[Union[bytes, str]] = None,
+        params: Optional[Mapping[str, Union[int, str]]] = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -131,15 +123,12 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
-        data: bytes | str | IO[Any],
+        headers: Optional[Mapping[str, str]] = None,
+        data: Union[bytes, str, IO[Any]],
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
             timeout = httpx.Timeout(timeout)
-        # Convert IO objects to bytes for httpx AsyncClient compatibility
-        if hasattr(data, "read"):
-            data = data.read()  # type: ignore
         return await self.request(
             "PUT", url, headers=headers, content=data, timeout=timeout
         )
@@ -148,8 +137,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
-        params: Mapping[str, int | str] | None = None,
+        headers: Optional[Mapping[str, str]] = None,
+        params: Optional[Mapping[str, Union[int, str]]] = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -162,8 +151,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Mapping[str, str] | None = None,
-        params: Mapping[str, int | str] | None = None,
+        headers: Optional[Mapping[str, str]] = None,
+        params: Optional[Mapping[str, Union[int, str]]] = None,
         timeout: Timeout = 10,
         allow_redirects: bool = False,
     ) -> Response:
@@ -208,55 +197,41 @@ def decode(payload: str) -> bytes:
     return base64.b64decode(payload, altchars=b"-_")
 
 
-def encode(payload: bytes | str) -> bytes:
+def encode(payload: Union[bytes, str]) -> bytes:
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
     return base64.b64encode(payload, altchars=b"-_")
 
 
-def get_service_data(service: str | IO[AnyStr] | None) -> dict[str, Any]:
-    """
-    Load service account credentials from explicit sources only.
-
-    Security: This function will ONLY load credentials from:
-    1. Explicitly provided file path (service parameter)
-    2. Explicitly provided file-like object (service parameter)
-    3. GOOGLE_APPLICATION_CREDENTIALS environment variable (if service is None)
-
-    It will NOT automatically search filesystem locations or use system directories.
-    Returns empty dict if no valid credentials are found.
-    """
-    # Only check GOOGLE_APPLICATION_CREDENTIALS if no explicit service provided
-    if service is None:
-        service = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-
+def get_service_data(service: Optional[Union[str, IO[AnyStr]]]) -> Dict[str, Any]:
+    service = service or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if not service:
-        return {}
+        # Try gcloud ADC path on disk
+        if os.name != "nt":
+            sdkpath = os.path.join(os.path.expanduser("~"), ".config", "gcloud")
+        else:
+            sdkpath = (
+                os.path.join(os.environ.get("APPDATA", ""), "gcloud")
+                if os.environ.get("APPDATA")
+                else os.path.join(os.environ.get("SystemDrive", "C:"), "\\", "gcloud")
+            )
+        cred_path = os.path.join(sdkpath, "application_default_credentials.json")
+        try:
+            with open(cred_path, encoding="utf-8") as f:
+                return orjson.load(f)
+        except Exception:
+            return {}
 
     try:
         # Attempt reading string path first
         with open(service, encoding="utf-8") as f:  # type: ignore[arg-type]
-            data = orjson.loads(f.read())
-            # Validate it's a proper service account JSON
-            if not isinstance(data, dict):
-                return {}
-            return data
-    except (TypeError, AttributeError):
+            return orjson.load(f)
+    except TypeError:
         # file-like object
         try:
-            content = service.read()  # type: ignore[union-attr]
-            if isinstance(content, bytes):
-                data = orjson.loads(content)
-            else:
-                data = orjson.loads(content.encode("utf-8"))
-            if not isinstance(data, dict):
-                return {}
-            return data
+            return orjson.loads(service.read())  # type: ignore[union-attr]
         except Exception:
             return {}
-    except (FileNotFoundError, PermissionError, OSError):
-        # Explicit file errors - don't silently ignore
-        return {}
     except Exception:
         return {}
 
@@ -270,8 +245,8 @@ class TokenResponse:
 class BaseToken:
     def __init__(
         self,
-        service_file: str | IO[AnyStr] | None = None,
-        session: Session | None = None,
+        service_file: Optional[Union[str, IO[AnyStr]]] = None,
+        session: Optional[Session] = None,
         *,
         background_refresh_after: float = 0.5,
         force_refresh_after: float = 0.95,
@@ -280,50 +255,31 @@ class BaseToken:
             raise ValueError("background_refresh_after must be between 0 and 1")
         if not (0 < force_refresh_after <= 1):
             raise ValueError("force_refresh_after must be between 0 and 1")
-        if background_refresh_after >= force_refresh_after:
-            raise ValueError(
-                "background_refresh_after must be less than force_refresh_after"
-            )
 
         self.background_refresh_after = background_refresh_after
         self.force_refresh_after = force_refresh_after
 
         self.service_data = get_service_data(service_file)
         if self.service_data:
-            # Validate required fields for service account
-            if "type" not in self.service_data:
-                raise ValueError("Invalid service account JSON: missing 'type' field")
-            try:
-                self.token_type = Type(self.service_data["type"])
-            except ValueError as e:
-                raise ValueError(
-                    f"Invalid service account type: {self.service_data['type']}"
-                ) from e
-
+            self.token_type = Type(self.service_data["type"])
             self.token_uri = self.service_data.get(
                 "token_uri", "https://oauth2.googleapis.com/token"
             )
-
-            # Validate token_uri is HTTPS
-            if not self.token_uri.startswith("https://"):
-                raise ValueError(
-                    f"token_uri must use HTTPS protocol, got: {self.token_uri}"
-                )
         else:
             self.token_type = Type.GCE_METADATA
             self.token_uri = GCE_ENDPOINT_TOKEN
 
         self.session = AioSession(session)
-        self.access_token: str | None = None
+        self.access_token: Optional[str] = None
         self.access_token_duration = 0
         self.access_token_acquired_at = datetime.datetime(
             1970, 1, 1, tzinfo=datetime.timezone.utc
         )
         self.access_token_preempt_after = 0
         self.access_token_refresh_after = 0
-        self.acquiring: asyncio.Task[None] | None = None
+        self.acquiring: Optional["asyncio.Task[None]"] = None
 
-    async def get_project(self) -> str | None:
+    async def get_project(self) -> Optional[str]:
         project = (
             os.environ.get("GOOGLE_CLOUD_PROJECT")
             or os.environ.get("GCLOUD_PROJECT")
@@ -344,7 +300,7 @@ class BaseToken:
             return self.service_data.get("project_id")
         return None
 
-    async def get(self) -> str | None:
+    async def get(self) -> Optional[str]:
         await self.ensure_token()
         return self.access_token
 
@@ -385,7 +341,7 @@ class BaseToken:
     async def close(self) -> None:
         await self.session.close()
 
-    async def __aenter__(self) -> BaseToken:
+    async def __aenter__(self) -> "BaseToken":
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -397,23 +353,15 @@ class Token(BaseToken):
 
     def __init__(
         self,
-        service_file: str | IO[AnyStr] | None = None,
-        session: Session | None = None,
-        scopes: list[str] | None = None,
+        service_file: Optional[Union[str, IO[AnyStr]]] = None,
+        session: Optional[Session] = None,
+        scopes: Optional[List[str]] = None,
     ) -> None:
         super().__init__(service_file=service_file, session=session)
         self.scopes = " ".join(scopes or []) if scopes else ""
 
     async def _refresh_authorized_user(self, timeout: int) -> TokenResponse:
         assert self.service_data
-        # Validate required fields
-        required = ["client_id", "client_secret", "refresh_token"]
-        missing = [f for f in required if f not in self.service_data]
-        if missing:
-            raise ValueError(
-                f"Invalid authorized_user credentials: missing {', '.join(missing)}"
-            )
-
         payload = httpx.QueryParams(
             {
                 "grant_type": "refresh_token",
@@ -427,8 +375,6 @@ class Token(BaseToken):
             self.token_uri, data=payload, headers=headers, timeout=timeout
         )
         data = resp.json()
-        if "access_token" not in data or "expires_in" not in data:
-            raise ValueError("Invalid token response: missing required fields")
         return TokenResponse(
             value=str(data["access_token"]), expires_in=int(data["expires_in"])
         )
@@ -444,23 +390,6 @@ class Token(BaseToken):
 
     async def _refresh_service_account(self, timeout: int) -> TokenResponse:
         assert self.service_data
-        # Validate required fields
-        required = ["client_email", "private_key"]
-        missing = [f for f in required if f not in self.service_data]
-        if missing:
-            raise ValueError(
-                f"Invalid service_account credentials: missing {', '.join(missing)}"
-            )
-
-        # Validate private key format
-        private_key = self.service_data["private_key"]
-        if not isinstance(private_key, str) or not private_key.strip():
-            raise ValueError("Invalid private_key: must be a non-empty string")
-        if "BEGIN PRIVATE KEY" not in private_key:
-            raise ValueError(
-                "Invalid private_key format: must be PEM-encoded private key"
-            )
-
         now = int(time.time())
         payload = {
             "iss": self.service_data["client_email"],
@@ -471,23 +400,21 @@ class Token(BaseToken):
             "iat": now,
             "exp": now + self.default_token_ttl,
         }
-        try:
-            assertion = jwt.encode(payload, private_key, algorithm="RS256")
-        except Exception as e:
-            raise ValueError(f"Failed to sign JWT assertion: {e}") from e
-
-        form = {
-            "assertion": assertion,
-            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        }
+        assertion = jwt.encode(
+            payload, self.service_data["private_key"], algorithm="RS256"
+        )
+        form = httpx.QueryParams(
+            {
+                "assertion": assertion,
+                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            }
+        ).encode()
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         resp = await self.session.post(
             self.token_uri, data=form, headers=headers, timeout=timeout
         )
         data = resp.json()
-        token_value = str(data.get("access_token") or data.get("id_token") or "")
-        if not token_value:
-            raise ValueError("Token response missing access_token or id_token")
+        token_value = str(data.get("access_token") or data.get("id_token"))
         expires = int(data.get("expires_in", "0") or self.default_token_ttl)
         return TokenResponse(value=token_value, expires_in=expires)
 
@@ -507,9 +434,9 @@ class IamClient:
     def __init__(
         self,
         *,
-        service_file: str | IO[AnyStr] | None = None,
-        session: Session | None = None,
-        token: Token | None = None,
+        service_file: Optional[Union[str, IO[AnyStr]]] = None,
+        session: Optional[Session] = None,
+        token: Optional[Token] = None,
     ) -> None:
         self.session = AioSession(session)
         self.token = token or Token(
@@ -518,22 +445,22 @@ class IamClient:
             scopes=["https://www.googleapis.com/auth/iam"],
         )
 
-    async def _headers(self) -> dict[str, str]:
+    async def _headers(self) -> Dict[str, str]:
         tok = await self.token.get()
         return {"Authorization": f"Bearer {tok}"}
 
     @property
-    def service_account_email(self) -> str | None:
+    def service_account_email(self) -> Optional[str]:
         return self.token.service_data.get("client_email")
 
     async def sign_blob(
         self,
-        payload: str | bytes | None,
+        payload: Optional[Union[str, bytes]],
         *,
-        service_account_email: str | None = None,
-        delegates: list[str] | None = None,
+        service_account_email: Optional[str] = None,
+        delegates: Optional[List[str]] = None,
         timeout: int = 10,
-    ) -> dict[str, str]:
+    ) -> Dict[str, str]:
         sa_email = service_account_email or self.service_account_email
         if not sa_email:
             raise TypeError("service_account_email is required for sign_blob")
@@ -555,7 +482,7 @@ class IamClient:
     async def close(self) -> None:
         await self.session.close()
 
-    async def __aenter__(self) -> IamClient:
+    async def __aenter__(self) -> "IamClient":
         return self
 
     async def __aexit__(self, *args: Any) -> None:

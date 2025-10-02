@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from gcs_httpx.auth import AioSession, IamClient, Token
+from gcshttpx.auth import AioSession, IamClient, Token
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ MC4CAQAwBQYDK2VwBCIEIJyC1vEIU2qvTgZl+Maa9QIEeGRLGOJxWT4VyrJ+yR8X
     }
 
     # Fake jwt.encode to return a static assertion to avoid crypto dep in test
-    import gcs_httpx.auth as auth_mod
+    import gcshttpx.auth as auth_mod
 
     def fake_jwt_encode(payload, key, algorithm):  # noqa
         return "ASSERTION"

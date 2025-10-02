@@ -40,7 +40,7 @@
 #### Service Account Keys
 
 ```python
-from gcs_httpx import Token
+from gcshttpx import Token
 
 # ✅ GOOD: Explicit path
 token = Token(

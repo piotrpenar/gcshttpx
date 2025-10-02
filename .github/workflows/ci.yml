@@ -37,7 +37,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Run tests with coverage
-        run: uv run pytest --cov=gcs_httpx --cov-report=xml --cov-report=term
+        run: uv run pytest --cov=gcshttpx --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

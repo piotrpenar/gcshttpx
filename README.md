@@ -30,7 +30,7 @@ pip install gcshttpx
 
 ```python
 import asyncio
-from gcs_httpx import Storage, Token
+from gcshttpx import Storage, Token
 
 async def main():
     # Create authenticated token
@@ -65,7 +65,7 @@ asyncio.run(main())
 ### Service Account (Recommended for Production)
 
 ```python
-from gcs_httpx import Token
+from gcshttpx import Token
 
 # From file path
 token = Token(
@@ -102,7 +102,7 @@ token = Token(
 ### GCE Metadata Server (For GCP Environments)
 
 ```python
-from gcs_httpx import Token
+from gcshttpx import Token
 
 # Automatically uses GCE metadata service if no credentials provided
 token = Token(scopes=["https://www.googleapis.com/auth/cloud-platform"])
@@ -229,7 +229,7 @@ print(metadata["location"], metadata["storageClass"])
 ### Signed URLs
 
 ```python
-from gcs_httpx import IamClient
+from gcshttpx import IamClient
 
 # Create IAM client for signing
 iam = IamClient(token=token)
@@ -267,7 +267,7 @@ await blob.delete()
 
 ```python
 import httpx
-from gcs_httpx import Storage, Token
+from gcshttpx import Storage, Token
 
 # Use custom httpx client with specific settings
 async with httpx.AsyncClient(
@@ -284,7 +284,7 @@ async with httpx.AsyncClient(
 ### Token Management
 
 ```python
-from gcs_httpx import Token
+from gcshttpx import Token
 
 token = Token(
     service_file="credentials.json",
@@ -309,7 +309,7 @@ await token.close()
 
 ```python
 import httpx
-from gcs_httpx import Storage
+from gcshttpx import Storage
 
 try:
     data = await storage.download("bucket", "nonexistent.txt")
@@ -351,7 +351,7 @@ uv sync
 uv run pytest
 
 # Run tests with coverage
-uv run pytest --cov=gcs_httpx
+uv run pytest --cov=gcshttpx
 
 # Lint code
 uv run ruff check .
