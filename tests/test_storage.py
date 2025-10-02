@@ -1,11 +1,9 @@
-import io
-import json
 from pathlib import Path
 
 import httpx
 import pytest
 
-from gcs_httpx.storage import Storage, Bucket, Blob
+from gcs_httpx.storage import Blob, Storage
 
 
 def make_client(handler: httpx.MockTransport) -> httpx.AsyncClient:
@@ -18,10 +16,13 @@ async def test_list_buckets_pagination():
         if req.method == "GET" and req.url.path == "/storage/v1/b":
             page = req.url.params.get("pageToken", "")
             if page == "":
-                return httpx.Response(200, json={
-                    "items": [{"id": "b1"}],
-                    "nextPageToken": "NXT",
-                })
+                return httpx.Response(
+                    200,
+                    json={
+                        "items": [{"id": "b1"}],
+                        "nextPageToken": "NXT",
+                    },
+                )
             return httpx.Response(200, json={"items": [{"id": "b2"}]})
         return httpx.Response(404)
 
@@ -59,7 +60,7 @@ async def test_download_and_delete_and_metadata(tmp_path: Path):
         if req.method == "GET" and req.url.path.endswith("/o/obj"):
             if req.url.params.get("alt") == "media":
                 return httpx.Response(200, content=b"hello-world")
-            return httpx.Response(200, content=b"{\"size\": 5}")
+            return httpx.Response(200, content=b'{"size": 5}')
         if req.method == "DELETE" and req.url.path.endswith("/o/obj"):
             return httpx.Response(200, text="OK")
         return httpx.Response(404)
@@ -107,11 +108,14 @@ async def test_list_objects_with_prefixes():
         if req.method == "GET" and req.url.path == "/storage/v1/b/bkt/o":
             page = req.url.params.get("pageToken", "")
             if page == "":
-                return httpx.Response(200, json={
-                    "items": [{"name": "a/1"}],
-                    "prefixes": ["a/"],
-                    "nextPageToken": "NXT",
-                })
+                return httpx.Response(
+                    200,
+                    json={
+                        "items": [{"name": "a/1"}],
+                        "prefixes": ["a/"],
+                        "nextPageToken": "NXT",
+                    },
+                )
             return httpx.Response(200, json={"items": [{"name": "b/2"}]})
         return httpx.Response(404)
 
@@ -128,7 +132,9 @@ async def test_upload_simple_and_multipart_and_resumable(tmp_path: Path):
         if req.method == "POST" and req.url.path == "/upload/storage/v1/b/bkt/o":
             # init resumable
             if req.url.params.get("uploadType") == "resumable":
-                return httpx.Response(200, headers={"Location": "http://session.upload/xyz"})
+                return httpx.Response(
+                    200, headers={"Location": "http://session.upload/xyz"}
+                )
             # simple/multipart result
             return httpx.Response(200, json={"bucket": "bkt", "name": "obj"})
         if req.method == "PUT" and req.url.host == "session.upload":
@@ -141,7 +147,13 @@ async def test_upload_simple_and_multipart_and_resumable(tmp_path: Path):
         res = await s.upload("bkt", "obj", b"data", content_type="text/plain")
         assert res["name"] == "obj"
         # multipart
-        res = await s.upload("bkt", "obj", b"data", content_type="text/plain", metadata={"cache-control": "no-cache"})
+        res = await s.upload(
+            "bkt",
+            "obj",
+            b"data",
+            content_type="text/plain",
+            metadata={"cache-control": "no-cache"},
+        )
         assert res["name"] == "obj"
         # resumable
         res = await s.upload("bkt", "obj", b"data", force_resumable_upload=True)
@@ -182,7 +194,7 @@ async def test_blob_helpers_and_signed_url_iam_path():
             return httpx.Response(200, json={"access_token": "abc", "expires_in": 3600})
         # generic metadata fetch for blob
         if req.method == "GET" and req.url.path == "/storage/v1/b/bkt/o/obj":
-            return httpx.Response(200, content=b"{\"size\": 3}")
+            return httpx.Response(200, content=b'{"size": 3}')
         # uploads
         if req.method == "POST" and req.url.path == "/upload/storage/v1/b/bkt/o":
             return httpx.Response(200, json={"bucket": "bkt", "name": "obj"})
@@ -197,8 +209,8 @@ async def test_blob_helpers_and_signed_url_iam_path():
         md = await blob.upload(b"data", content_type="application/octet-stream")
         assert md["name"] == "obj"
         # signed url (IAM path)
-        url = await blob.get_signed_url(60, iam_client=None, service_account_email="sa@example.com")
+        url = await blob.get_signed_url(
+            60, iam_client=None, service_account_email="sa@example.com", session=client
+        )
         assert "X-Goog-Signature=414243" in url
         await s.close()
-
-

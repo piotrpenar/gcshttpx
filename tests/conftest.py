@@ -1,6 +1,4 @@
-import asyncio
-import json
-from typing import Callable, Dict, Any
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -8,9 +6,11 @@ import pytest
 
 class TransportBuilder:
     def __init__(self) -> None:
-        self.routes: Dict[str, Callable[[httpx.Request], httpx.Response]] = {}
+        self.routes: dict[str, Callable[[httpx.Request], httpx.Response]] = {}
 
-    def route(self, method: str, url: str, handler: Callable[[httpx.Request], httpx.Response]) -> None:
+    def route(
+        self, method: str, url: str, handler: Callable[[httpx.Request], httpx.Response]
+    ) -> None:
         self.routes[f"{method.upper()} {url}"] = handler
 
     def build(self) -> httpx.MockTransport:
@@ -26,5 +26,3 @@ class TransportBuilder:
 @pytest.fixture
 def mock_transport() -> TransportBuilder:
     return TransportBuilder()
-
-

@@ -51,14 +51,23 @@ venv
 
 __pycache__
 
+# Python virtual environments
 .venv
+venv/
 *.exe
+
+# uv
+.uv/
+
+# Build artifacts
+dist/
+*.egg-info/
 
 .env*.local
 *.log
 secret
 *.code-workspace
-.python-version
 .claude/settings.local.json
 profile.html
 docker-compose.override.yml
+.coverage

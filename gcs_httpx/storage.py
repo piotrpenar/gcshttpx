@@ -2,29 +2,30 @@
 Google Cloud Storage client using httpx (async, HTTP/2). Feature-parity surface
 with a minimal, DRY design. Bucket/Blob helpers are provided for ergonomics.
 """
+
 from __future__ import annotations
 
-import binascii
-import base64
-import datetime
 import asyncio as _asyncio
+import base64
+import binascii
+import datetime
 import gzip
 import io
 import json
 import logging
 import mimetypes
 import os
-from typing import Any, AnyStr, Dict, IO, Iterator, List, Optional, Tuple, Union
+from collections.abc import Iterator
+from typing import IO, Any, AnyStr
 from urllib.parse import quote
 
 import httpx
 import orjson
-
-from .auth import AioSession, IamClient, Token
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
+from .auth import AioSession, IamClient, Token
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ MAX_CONTENT_LENGTH_SIMPLE_UPLOAD = 5 * 1024 * 1024  # 5 MB
 SCOPES = ["https://www.googleapis.com/auth/devstorage.read_write"]
 
 
-def _init_api_root(api_root: Optional[str]) -> Tuple[bool, str]:
+def _init_api_root(api_root: str | None) -> tuple[bool, str]:
     if api_root:
         return True, api_root
     host = os.environ.get("STORAGE_EMULATOR_HOST")
@@ -52,9 +53,9 @@ def _choose_boundary() -> str:
 
 
 def _encode_multipart_formdata(
-    fields: List[Tuple[Dict[str, str], bytes]], boundary: str
-) -> Tuple[bytes, str]:
-    body: List[bytes] = []
+    fields: list[tuple[dict[str, str], bytes]], boundary: str
+) -> tuple[bytes, str]:
+    body: list[bytes] = []
     for headers, data in fields:
         body.append(f"--{boundary}\r\n".encode())
         for k in ["Content-Disposition", "Content-Type", "Content-Location"]:
@@ -74,7 +75,7 @@ def _encode_multipart_formdata(
 class StreamResponse:
     def __init__(self, response: httpx.Response) -> None:
         self._response = response
-        self._iter: Optional[Iterator[bytes]] = None
+        self._iter: Iterator[bytes] | None = None
         self._stream_iter = None
 
     @property
@@ -108,10 +109,10 @@ class Storage:
     def __init__(
         self,
         *,
-        service_file: Optional[Union[str, IO[AnyStr]]] = None,
-        token: Optional[Token] = None,
-        session: Optional[Session] = None,
-        api_root: Optional[str] = None,
+        service_file: str | IO[AnyStr] | None = None,
+        token: Token | None = None,
+        session: Session | None = None,
+        api_root: str | None = None,
     ) -> None:
         self._api_is_dev, self._api_root = _init_api_root(api_root)
         self._api_root_read = f"{self._api_root}/storage/v1/b"
@@ -122,7 +123,7 @@ class Storage:
             service_file=service_file, scopes=SCOPES, session=self.session.session
         )
 
-    async def _headers(self) -> Dict[str, str]:
+    async def _headers(self) -> dict[str, str]:
         if self._api_is_dev:
             return {}
         tok = await self.token.get()
@@ -132,18 +133,18 @@ class Storage:
         self,
         project: str,
         *,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        session: Optional[Session] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, Any] | None = None,
+        session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-    ) -> List["Bucket"]:
+    ) -> list[Bucket]:
         url = f"{self._api_root_read}?project={project}"
         headers = {**(headers or {}), **(await self._headers())}
         params = dict(params or {})
         if not params.get("pageToken"):
             params["pageToken"] = ""
         s = AioSession(session) if session else self.session
-        buckets: List[Bucket] = []
+        buckets: list[Bucket] = []
         while True:
             resp = await s.get(url, headers=headers, params=params, timeout=timeout)
             data = resp.json()
@@ -154,7 +155,7 @@ class Storage:
                 break
         return buckets
 
-    def get_bucket(self, bucket_name: str) -> "Bucket":
+    def get_bucket(self, bucket_name: str) -> Bucket:
         return Bucket(self, bucket_name)
 
     async def copy(
@@ -163,32 +164,46 @@ class Storage:
         object_name: str,
         destination_bucket: str,
         *,
-        new_name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
+        new_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[Session] = None,
-    ) -> Dict[str, Any]:
+        session: Session | None = None,
+    ) -> dict[str, Any]:
         new_name = new_name or object_name
         url = (
             f"{self._api_root_read}/{bucket}/o/"
             f"{quote(object_name, safe='')}/rewriteTo/b/"
             f"{destination_bucket}/o/{quote(new_name, safe='')}"
         )
-        metadict = {self._format_metadata_key(k): v for k, v in dict(metadata or {}).items()}
+        metadict = {
+            self._format_metadata_key(k): v for k, v in dict(metadata or {}).items()
+        }
         if "metadata" in metadict:
-            metadict["metadata"] = {str(k): (str(v) if v is not None else None) for k, v in metadict["metadata"].items()}
+            metadict["metadata"] = {
+                str(k): (str(v) if v is not None else None)
+                for k, v in metadict["metadata"].items()
+            }
         body = orjson.dumps(metadict)
         headers = {**(headers or {}), **(await self._headers())}
-        headers.update({"Content-Type": "application/json; charset=UTF-8", "Content-Length": str(len(body))})
+        headers.update(
+            {
+                "Content-Type": "application/json; charset=UTF-8",
+                "Content-Length": str(len(body)),
+            }
+        )
         s = AioSession(session) if session else self.session
         params = params or {}
-        resp = await s.post(url, headers=headers, params=params, timeout=timeout, data=body)
-        data: Dict[str, Any] = resp.json()
+        resp = await s.post(
+            url, headers=headers, params=params, timeout=timeout, data=body
+        )
+        data: dict[str, Any] = resp.json()
         while not data.get("done") and data.get("rewriteToken"):
             params["rewriteToken"] = data["rewriteToken"]
-            resp = await s.post(url, headers=headers, params=params, timeout=timeout, data=body)
+            resp = await s.post(
+                url, headers=headers, params=params, timeout=timeout, data=body
+            )
             data = resp.json()
         return data
 
@@ -198,15 +213,17 @@ class Storage:
         object_name: str,
         *,
         timeout: int = DEFAULT_TIMEOUT,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        session: Optional[Session] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        session: Session | None = None,
     ) -> str:
         encoded = quote(object_name, safe="")
         url = f"{self._api_root_read}/{bucket}/o/{encoded}"
         headers = {**(headers or {}), **(await self._headers())}
         s = AioSession(session) if session else self.session
-        resp = await s.delete(url, headers=headers, params=params or {}, timeout=timeout)
+        resp = await s.delete(
+            url, headers=headers, params=params or {}, timeout=timeout
+        )
         try:
             return resp.text  # type: ignore[return-value]
         except Exception:
@@ -217,19 +234,28 @@ class Storage:
         bucket: str,
         object_name: str,
         *,
-        headers: Optional[Dict[str, Any]] = None,
+        headers: dict[str, Any] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[Session] = None,
+        session: Session | None = None,
     ) -> bytes:
         return await self._download(
-            bucket, object_name, headers=headers, timeout=timeout, params={"alt": "media"}, session=session
+            bucket,
+            object_name,
+            headers=headers,
+            timeout=timeout,
+            params={"alt": "media"},
+            session=session,
         )
 
-    async def download_to_filename(self, bucket: str, object_name: str, filename: str, **kwargs: Any) -> None:
+    async def download_to_filename(
+        self, bucket: str, object_name: str, filename: str, **kwargs: Any
+    ) -> None:
         data = await self.download(bucket, object_name, **kwargs)
+
         def _write() -> None:
             with open(filename, "wb+") as f:
                 f.write(data)
+
         await _asyncio.to_thread(_write)
 
     async def download_metadata(
@@ -237,12 +263,17 @@ class Storage:
         bucket: str,
         object_name: str,
         *,
-        headers: Optional[Dict[str, Any]] = None,
-        session: Optional[Session] = None,
+        headers: dict[str, Any] | None = None,
+        session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         data = await self._download(
-            bucket, object_name, headers=headers, timeout=timeout, params={"alt": "json"}, session=session
+            bucket,
+            object_name,
+            headers=headers,
+            timeout=timeout,
+            params={"alt": "json"},
+            session=session,
         )
         return json.loads(data.decode())
 
@@ -251,23 +282,28 @@ class Storage:
         bucket: str,
         object_name: str,
         *,
-        headers: Optional[Dict[str, Any]] = None,
+        headers: dict[str, Any] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[Session] = None,
+        session: Session | None = None,
     ) -> StreamResponse:
         return await self._download_stream(
-            bucket, object_name, headers=headers, timeout=timeout, params={"alt": "media"}, session=session
+            bucket,
+            object_name,
+            headers=headers,
+            timeout=timeout,
+            params={"alt": "media"},
+            session=session,
         )
 
     async def list_objects(
         self,
         bucket: str,
         *,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        session: Optional[Session] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, Any] | None = None,
+        session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{self._api_root_read}/{bucket}/o"
         headers = {**(headers or {}), **(await self._headers())}
         s = AioSession(session) if session else self.session
@@ -280,15 +316,15 @@ class Storage:
         object_name: str,
         file_data: Any,
         *,
-        content_type: Optional[str] = None,
-        parameters: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        session: Optional[Session] = None,
-        force_resumable_upload: Optional[bool] = None,
+        content_type: str | None = None,
+        parameters: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        session: Session | None = None,
+        force_resumable_upload: bool | None = None,
         zipped: bool = False,
         timeout: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{self._api_root_write}/{bucket}/o"
         stream = self._preprocess_data(file_data)
         params = dict(parameters or {})
@@ -298,18 +334,47 @@ class Storage:
         content_length = self._get_stream_len(stream)
         content_type = content_type or mimetypes.guess_type(object_name)[0] or ""
         headers = {**(headers or {}), **(await self._headers())}
-        headers.update({"Content-Length": str(content_length), "Content-Type": content_type})
+        headers.update(
+            {"Content-Length": str(content_length), "Content-Type": content_type}
+        )
         upload_type = self._decide_upload_type(force_resumable_upload, content_length)
-        s = AioSession(session) if session else self.session
         if upload_type == "resumable":
-            return await self._upload_resumable(url, object_name, stream, params, headers, metadata=metadata, session=session, timeout=timeout)
+            return await self._upload_resumable(
+                url,
+                object_name,
+                stream,
+                params,
+                headers,
+                metadata=metadata,
+                session=session,
+                timeout=timeout,
+            )
         if upload_type == "simple":
             if metadata:
-                return await self._upload_multipart(url, object_name, stream, params, headers, metadata or {}, session=session, timeout=timeout)
-            return await self._upload_simple(url, object_name, stream, params, headers, session=session, timeout=timeout)
+                return await self._upload_multipart(
+                    url,
+                    object_name,
+                    stream,
+                    params,
+                    headers,
+                    metadata or {},
+                    session=session,
+                    timeout=timeout,
+                )
+            return await self._upload_simple(
+                url,
+                object_name,
+                stream,
+                params,
+                headers,
+                session=session,
+                timeout=timeout,
+            )
         raise TypeError("unsupported upload type")
 
-    async def upload_from_filename(self, bucket: str, object_name: str, filename: str, **kwargs: Any) -> Dict[str, Any]:
+    async def upload_from_filename(
+        self, bucket: str, object_name: str, filename: str, **kwargs: Any
+    ) -> dict[str, Any]:
         def _read() -> bytes:
             with open(filename, "rb") as f:
                 return f.read()
@@ -321,23 +386,32 @@ class Storage:
         self,
         bucket: str,
         object_name: str,
-        source_object_names: List[str],
+        source_object_names: list[str],
         *,
-        content_type: Optional[str] = None,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        session: Optional[Session] = None,
+        content_type: str | None = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, Any] | None = None,
+        session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{self._api_root_read}/{bucket}/o/{quote(object_name, safe='')}/compose"
         headers = {**(headers or {}), **(await self._headers())}
-        payload: Dict[str, Any] = {"sourceObjects": [{"name": n} for n in source_object_names]}
+        payload: dict[str, Any] = {
+            "sourceObjects": [{"name": n} for n in source_object_names]
+        }
         if content_type:
             payload["destination"] = {"contentType": content_type}
         body = orjson.dumps(payload)
-        headers.update({"Content-Type": "application/json; charset=UTF-8", "Content-Length": str(len(body))})
+        headers.update(
+            {
+                "Content-Type": "application/json; charset=UTF-8",
+                "Content-Length": str(len(body)),
+            }
+        )
         s = AioSession(session) if session else self.session
-        resp = await s.post(url, headers=headers, params=params or {}, timeout=timeout, data=body)
+        resp = await s.post(
+            url, headers=headers, params=params or {}, timeout=timeout, data=body
+        )
         return resp.json()
 
     @staticmethod
@@ -361,31 +435,36 @@ class Storage:
         raise TypeError(f"unsupported upload type: {type(data)!r}")
 
     @staticmethod
-    def _compress_file_in_chunks(input_stream: IO[AnyStr], chunk_size: int = 8192) -> IO[bytes]:
+    def _compress_file_in_chunks(
+        input_stream: IO[AnyStr], chunk_size: int = 8192
+    ) -> IO[bytes]:
         out = io.BytesIO()
         with gzip.open(out, "wb") as gz:
             while True:
                 chunk = input_stream.read(chunk_size)
                 if not chunk:
                     break
-                if isinstance(chunk, str):
-                    chunk_b = chunk.encode("utf-8")
-                else:
-                    chunk_b = chunk
+                chunk_b = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
                 gz.write(chunk_b)
         out.seek(0)
         return out
 
     @staticmethod
-    def _decide_upload_type(force_resumable_upload: Optional[bool], content_length: int) -> str:
+    def _decide_upload_type(
+        force_resumable_upload: bool | None, content_length: int
+    ) -> str:
         if force_resumable_upload is True:
             return "resumable"
         if force_resumable_upload is False:
             return "simple"
-        return "resumable" if content_length > MAX_CONTENT_LENGTH_SIMPLE_UPLOAD else "simple"
+        return (
+            "resumable"
+            if content_length > MAX_CONTENT_LENGTH_SIMPLE_UPLOAD
+            else "simple"
+        )
 
     @staticmethod
-    def _split_content_type(content_type: str) -> Tuple[str, Optional[str]]:
+    def _split_content_type(content_type: str) -> tuple[str, str | None]:
         parts = content_type.split(";")
         ctype = parts[0].lower().strip()
         encoding = None
@@ -405,10 +484,10 @@ class Storage:
         bucket: str,
         object_name: str,
         *,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[Session] = None,
+        session: Session | None = None,
     ) -> bytes:
         url = f"{self._api_root_read}/{bucket}/o/{quote(object_name, safe='')}"
         headers = {**(headers or {}), **(await self._headers())}
@@ -421,10 +500,10 @@ class Storage:
         bucket: str,
         object_name: str,
         *,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[Session] = None,
+        session: Session | None = None,
     ) -> StreamResponse:
         url = f"{self._api_root_read}/{bucket}/o/{quote(object_name, safe='')}"
         headers = {**(headers or {}), **(await self._headers())}
@@ -437,17 +516,19 @@ class Storage:
         url: str,
         object_name: str,
         stream: IO[AnyStr],
-        params: Dict[str, str],
-        headers: Dict[str, str],
+        params: dict[str, str],
+        headers: dict[str, str],
         *,
-        session: Optional[Session] = None,
+        session: Session | None = None,
         timeout: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         params = dict(params)
         params["name"] = object_name
         params["uploadType"] = "media"
         s = self.session if not session else AioSession(session)
-        resp = await s.post(url, data=stream, headers=headers, params=params, timeout=timeout)
+        resp = await s.post(
+            url, data=stream, headers=headers, params=params, timeout=timeout
+        )
         return resp.json()
 
     async def _upload_multipart(
@@ -455,32 +536,50 @@ class Storage:
         url: str,
         object_name: str,
         stream: IO[AnyStr],
-        params: Dict[str, str],
-        headers: Dict[str, str],
-        metadata: Dict[str, Any],
+        params: dict[str, str],
+        headers: dict[str, str],
+        metadata: dict[str, Any],
         *,
-        session: Optional[Session] = None,
+        session: Session | None = None,
         timeout: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         params = dict(params)
         params["uploadType"] = "multipart"
         metadata_headers = {"Content-Type": "application/json; charset=UTF-8"}
         metadata = {self._format_metadata_key(k): v for k, v in metadata.items()}
         if "metadata" in metadata:
-            metadata["metadata"] = {str(k): (str(v) if v is not None else None) for k, v in metadata["metadata"].items()}
+            metadata["metadata"] = {
+                str(k): (str(v) if v is not None else None)
+                for k, v in metadata["metadata"].items()
+            }
         metadata["name"] = object_name
         raw_body: AnyStr = stream.read()
         bytes_body = raw_body.encode("utf-8") if isinstance(raw_body, str) else raw_body
         parts = [
             (metadata_headers, orjson.dumps(metadata)),
-            ({"Content-Type": headers.get("Content-Type", "application/octet-stream")}, bytes_body),
+            (
+                {
+                    "Content-Type": headers.get(
+                        "Content-Type", "application/octet-stream"
+                    )
+                },
+                bytes_body,
+            ),
         ]
         boundary = _choose_boundary()
         body, content_type = _encode_multipart_formdata(parts, boundary)
         headers = dict(headers)
-        headers.update({"Content-Type": content_type, "Content-Length": str(len(body)), "Accept": "application/json"})
+        headers.update(
+            {
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+                "Accept": "application/json",
+            }
+        )
         s = self.session if not session else AioSession(session)
-        resp = await s.post(url, data=body, headers=headers, params=params, timeout=timeout)
+        resp = await s.post(
+            url, data=body, headers=headers, params=params, timeout=timeout
+        )
         return resp.json()
 
     async def _upload_resumable(
@@ -488,32 +587,41 @@ class Storage:
         url: str,
         object_name: str,
         stream: IO[AnyStr],
-        params: Dict[str, str],
-        headers: Dict[str, str],
+        params: dict[str, str],
+        headers: dict[str, str],
         *,
-        metadata: Optional[Dict[str, Any]] = None,
-        session: Optional[Session] = None,
+        metadata: dict[str, Any] | None = None,
+        session: Session | None = None,
         timeout: int = 30,
-    ) -> Dict[str, Any]:
-        session_uri = await self._initiate_upload(url, object_name, params, headers, metadata=metadata)
-        return await self._do_upload(session_uri, stream, headers=headers, session=session, timeout=timeout)
+    ) -> dict[str, Any]:
+        session_uri = await self._initiate_upload(
+            url, object_name, params, headers, metadata=metadata
+        )
+        return await self._do_upload(
+            session_uri, stream, headers=headers, session=session, timeout=timeout
+        )
 
     async def _initiate_upload(
         self,
         url: str,
         object_name: str,
-        params: Dict[str, str],
-        headers: Dict[str, str],
+        params: dict[str, str],
+        headers: dict[str, str],
         *,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[Session] = None,
+        session: Session | None = None,
     ) -> str:
         params = dict(params)
         params["uploadType"] = "resumable"
-        metadict = {self._format_metadata_key(k): v for k, v in dict(metadata or {}).items()}
+        metadict = {
+            self._format_metadata_key(k): v for k, v in dict(metadata or {}).items()
+        }
         if "metadata" in metadict:
-            metadict["metadata"] = {str(k): (str(v) if v is not None else None) for k, v in metadict["metadata"].items()}
+            metadict["metadata"] = {
+                str(k): (str(v) if v is not None else None)
+                for k, v in metadict["metadata"].items()
+            }
         metadict.update({"name": object_name})
         body = orjson.dumps(metadict)
         post_headers = dict(headers)
@@ -521,35 +629,41 @@ class Storage:
             {
                 "Content-Type": "application/json; charset=UTF-8",
                 "Content-Length": str(len(body)),
-                "X-Upload-Content-Type": headers.get("Content-Type", "application/octet-stream"),
+                "X-Upload-Content-Type": headers.get(
+                    "Content-Type", "application/octet-stream"
+                ),
                 "X-Upload-Content-Length": headers.get("Content-Length", "0"),
             }
         )
         s = self.session if not session else AioSession(session)
-        resp = await s.post(url, headers=post_headers, params=params, data=body, timeout=timeout)
+        resp = await s.post(
+            url, headers=post_headers, params=params, data=body, timeout=timeout
+        )
         return resp.headers["Location"]
 
     async def _do_upload(
         self,
         session_uri: str,
         stream: IO[AnyStr],
-        headers: Dict[str, str],
+        headers: dict[str, str],
         *,
         retries: int = 5,
-        session: Optional[Session] = None,
+        session: Session | None = None,
         timeout: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         s = self.session if not session else AioSession(session)
         original_close = stream.close
         original_position = stream.tell()
         stream.close = lambda: None  # type: ignore[assignment]
-        resp: Optional[httpx.Response] = None
+        resp: httpx.Response | None = None
         try:
             for attempt in range(retries):
                 try:
                     stream.seek(original_position)
                     content = stream.read()
-                    resp = await s.put(session_uri, headers=headers, data=content, timeout=timeout)
+                    resp = await s.put(
+                        session_uri, headers=headers, data=content, timeout=timeout
+                    )
                 except ResponseError:
                     if attempt == retries - 1:
                         raise
@@ -565,13 +679,13 @@ class Storage:
         self,
         bucket: str,
         object_name: str,
-        metadata: Dict[str, Any],
+        metadata: dict[str, Any],
         *,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        session: Optional[Session] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         encoded = quote(object_name, safe="")
         url = f"{self._api_root_read}/{bucket}/o/{encoded}"
         params = params or {}
@@ -579,18 +693,20 @@ class Storage:
         headers["Content-Type"] = "application/json"
         body = orjson.dumps(metadata)
         s = AioSession(session) if session else self.session
-        resp = await s.patch(url, data=body, headers=headers, params=params, timeout=timeout)
+        resp = await s.patch(
+            url, data=body, headers=headers, params=params, timeout=timeout
+        )
         return resp.json()
 
     async def get_bucket_metadata(
         self,
         bucket: str,
         *,
-        params: Optional[Dict[str, str]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        session: Optional[Session] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{self._api_root_read}/{bucket}"
         headers = {**(headers or {}), **(await self._headers())}
         s = AioSession(session) if session else self.session
@@ -600,9 +716,9 @@ class Storage:
     async def close(self) -> None:
         await self.session.close()
 
-    async def __aenter__(self) -> "Storage":
+    async def __aenter__(self) -> Storage:
         return self
-    
+
     async def __aexit__(self, *args: Any) -> None:
         await self.close()
 
@@ -612,16 +728,30 @@ class Bucket:
         self.storage = storage
         self.name = name
 
-    async def get_blob(self, blob_name: str, *, timeout: int = DEFAULT_TIMEOUT, session: Optional[Session] = None) -> "Blob":
-        metadata = await self.storage.download_metadata(self.name, blob_name, timeout=timeout, session=session)
+    async def get_blob(
+        self,
+        blob_name: str,
+        *,
+        timeout: int = DEFAULT_TIMEOUT,
+        session: Session | None = None,
+    ) -> Blob:
+        metadata = await self.storage.download_metadata(
+            self.name, blob_name, timeout=timeout, session=session
+        )
         return Blob(self, blob_name, metadata)
 
-    async def blob_exists(self, blob_name: str, *, session: Optional[Session] = None) -> bool:
+    async def blob_exists(
+        self, blob_name: str, *, session: Session | None = None
+    ) -> bool:
         try:
             await self.get_blob(blob_name, session=session)
             return True
         except ResponseError as e:  # type: ignore[misc]
-            status = getattr(e, "response", None).status_code if hasattr(e, "response") else None
+            status = (
+                getattr(e, "response", None).status_code
+                if hasattr(e, "response")
+                else None
+            )
             code = getattr(e, "status", None) or getattr(e, "code", None)
             if status in {404, 410} or code in {404, 410}:  # type: ignore[operator]
                 return False
@@ -633,12 +763,19 @@ class Bucket:
         match_glob: str = "",
         delimiter: str = "",
         *,
-        session: Optional[Session] = None,
-    ) -> List[str]:
-        params = {"delimiter": delimiter, "matchGlob": match_glob, "pageToken": "", "prefix": prefix}
-        items: List[str] = []
+        session: Session | None = None,
+    ) -> list[str]:
+        params = {
+            "delimiter": delimiter,
+            "matchGlob": match_glob,
+            "pageToken": "",
+            "prefix": prefix,
+        }
+        items: list[str] = []
         while True:
-            content = await self.storage.list_objects(self.name, params=params, session=session)
+            content = await self.storage.list_objects(
+                self.name, params=params, session=session
+            )
             items.extend([x["name"] for x in content.get("items", [])])
             if delimiter:
                 items.extend(content.get("prefixes", []))
@@ -647,22 +784,26 @@ class Bucket:
                 break
         return items
 
-    def new_blob(self, blob_name: str) -> "Blob":
+    def new_blob(self, blob_name: str) -> Blob:
         return Blob(self, blob_name, {"size": 0})
 
-    async def get_metadata(self, *, params: Optional[Dict[str, Any]] = None, session: Optional[Session] = None) -> Dict[str, Any]:
-        return await self.storage.get_bucket_metadata(self.name, params=params, session=session)
+    async def get_metadata(
+        self, *, params: dict[str, Any] | None = None, session: Session | None = None
+    ) -> dict[str, Any]:
+        return await self.storage.get_bucket_metadata(
+            self.name, params=params, session=session
+        )
 
 
 class Blob:
-    def __init__(self, bucket: Bucket, name: str, metadata: Dict[str, Any]) -> None:
+    def __init__(self, bucket: Bucket, name: str, metadata: dict[str, Any]) -> None:
         metadata = dict(metadata)
         metadata["bucket_name"] = metadata.pop("bucket", "")
         self.__dict__.update(**metadata)
         self.bucket = bucket
         self.name = name
         try:
-            self.size = int(getattr(self, "size"))  # type: ignore[attr-defined]
+            self.size = int(self.size)  # type: ignore[attr-defined]
         except Exception:
             self.size = 0
 
@@ -671,12 +812,36 @@ class Blob:
         # Next multiple of 256KiB
         return self.size + (262144 - (self.size % 262144)) if self.size else 262144
 
-    async def download(self, *, timeout: int = DEFAULT_TIMEOUT, session: Optional[Session] = None, auto_decompress: bool = True) -> Any:
+    async def download(
+        self,
+        *,
+        timeout: int = DEFAULT_TIMEOUT,
+        session: Session | None = None,
+        auto_decompress: bool = True,
+    ) -> Any:
         headers = None if auto_decompress else {"accept-encoding": "gzip"}
-        return await self.bucket.storage.download(self.bucket.name, self.name, timeout=timeout, session=session, headers=headers)
+        return await self.bucket.storage.download(
+            self.bucket.name,
+            self.name,
+            timeout=timeout,
+            session=session,
+            headers=headers,
+        )
 
-    async def upload(self, data: Any, *, content_type: Optional[str] = None, session: Optional[Session] = None) -> Dict[str, Any]:
-        metadata = await self.bucket.storage.upload(self.bucket.name, self.name, data, content_type=content_type, session=session)
+    async def upload(
+        self,
+        data: Any,
+        *,
+        content_type: str | None = None,
+        session: Session | None = None,
+    ) -> dict[str, Any]:
+        metadata = await self.bucket.storage.upload(
+            self.bucket.name,
+            self.name,
+            data,
+            content_type=content_type,
+            session=session,
+        )
         metadata["bucket_name"] = metadata.pop("bucket", "")
         self.__dict__.update(metadata)
         return metadata
@@ -685,30 +850,39 @@ class Blob:
         self,
         expiration: int,
         *,
-        headers: Optional[Dict[str, str]] = None,
-        query_params: Optional[Dict[str, Any]] = None,
+        headers: dict[str, str] | None = None,
+        query_params: dict[str, Any] | None = None,
         http_method: str = "GET",
-        iam_client: Optional[IamClient] = None,
-        service_account_email: Optional[str] = None,
-        token: Optional[Token] = None,
-        session: Optional[Session] = None,
+        iam_client: IamClient | None = None,
+        service_account_email: str | None = None,
+        token: Token | None = None,
+        session: Session | None = None,
     ) -> str:
         if expiration > 604800:
-            raise ValueError("expiration time can't be longer than 604800 seconds (7 days)")
+            raise ValueError(
+                "expiration time can't be longer than 604800 seconds (7 days)"
+            )
         quoted_name = quote(self.name, safe=b"/~")
         canonical_uri = f"/{self.bucket.name}/{quoted_name}"
         datetime_now = datetime.datetime.now(datetime.timezone.utc)
         request_timestamp = datetime_now.strftime("%Y%m%dT%H%M%SZ")
         datestamp = datetime_now.strftime("%Y%m%d")
         token = token or self.bucket.storage.token
-        client_email = token.service_data.get("client_email") if token.service_data else None
-        private_key = token.service_data.get("private_key") if token.service_data else None
+        client_email = (
+            token.service_data.get("client_email") if token.service_data else None
+        )
+        private_key = (
+            token.service_data.get("private_key") if token.service_data else None
+        )
         credential_scope = f"{datestamp}/auto/storage/goog4_request"
         credential = f"{(service_account_email or client_email)}/{credential_scope}"
         host = os.environ.get("STORAGE_EMULATOR_HOST", "storage.googleapis.com")
         headers = dict(headers or {})
         headers["host"] = host
-        ordered_headers = {k.lower(): str(v).lower() for k, v in sorted(headers.items(), key=lambda x: x[0].lower())}
+        ordered_headers = {
+            k.lower(): str(v).lower()
+            for k, v in sorted(headers.items(), key=lambda x: x[0].lower())
+        }
         canonical_headers = "".join(f"{k}:{v}\n" for k, v in ordered_headers.items())
         signed_headers = ";".join(ordered_headers.keys())
         query_params = dict(query_params or {})
@@ -722,26 +896,49 @@ class Blob:
             }
         )
         ordered_q = "&".join(
-            f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in sorted(query_params.items())
+            f"{quote(str(k), safe='')}={quote(str(v), safe='')}"
+            for k, v in sorted(query_params.items())
         )
-        canonical_req = "\n".join([http_method, canonical_uri, ordered_q, canonical_headers, signed_headers, "UNSIGNED-PAYLOAD"])
-        canonical_req_hash = __import__("hashlib").sha256(canonical_req.encode()).hexdigest()
-        string_to_sign = "\n".join(["GOOG4-RSA-SHA256", request_timestamp, credential_scope, canonical_req_hash])
+        canonical_req = "\n".join(
+            [
+                http_method,
+                canonical_uri,
+                ordered_q,
+                canonical_headers,
+                signed_headers,
+                "UNSIGNED-PAYLOAD",
+            ]
+        )
+        canonical_req_hash = (
+            __import__("hashlib").sha256(canonical_req.encode()).hexdigest()
+        )
+        string_to_sign = "\n".join(
+            [
+                "GOOG4-RSA-SHA256",
+                request_timestamp,
+                credential_scope,
+                canonical_req_hash,
+            ]
+        )
 
         signature_hex: str
         if private_key:
             # Local PKCS8 key signing using cryptography
             key = load_pem_private_key(private_key.encode("utf-8"), password=None)
-            signed = key.sign(string_to_sign.encode(), padding.PKCS1v15(), hashes.SHA256())
+            signed = key.sign(
+                string_to_sign.encode(), padding.PKCS1v15(), hashes.SHA256()
+            )
             signature_hex = binascii.hexlify(signed).decode()
         else:
             provided_session = bool(iam_client or session)
             iam_client = iam_client or IamClient(token=token, session=session)
-            signed_resp = await iam_client.sign_blob(string_to_sign, service_account_email=service_account_email)
-            signature_hex = binascii.hexlify(base64.urlsafe_b64decode(signed_resp["signedBlob"])) .decode()
+            signed_resp = await iam_client.sign_blob(
+                string_to_sign, service_account_email=service_account_email
+            )
+            signature_hex = binascii.hexlify(
+                base64.urlsafe_b64decode(signed_resp["signedBlob"])
+            ).decode()
             if not provided_session:
                 await iam_client.close()
 
         return f"https://{host}{canonical_uri}?{ordered_q}&X-Goog-Signature={signature_hex}"
-
-

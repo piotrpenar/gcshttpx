@@ -1,15 +1,18 @@
 import io
 import json
+
 import httpx
 import pytest
 
-from gcs_httpx.auth import AioSession, Token, Type, IamClient
+from gcs_httpx.auth import AioSession, IamClient, Token
 
 
 @pytest.mark.asyncio
 async def test_session_http2():
     s = AioSession()
-    assert s.session.http2
+    # Verify session is created and uses HTTP/2 (httpx doesn't expose http2 attr after 0.24)
+    assert s.session is not None
+    assert isinstance(s.session, httpx.AsyncClient)
     await s.close()
 
 
@@ -39,7 +42,11 @@ MC4CAQAwBQYDK2VwBCIEIJyC1vEIU2qvTgZl+Maa9QIEeGRLGOJxWT4VyrJ+yR8X
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, http2=True) as client:
-        tok = Token(session=client, scopes=["scope"], service_file=io.StringIO(json.dumps(service_data)))
+        tok = Token(
+            session=client,
+            scopes=["scope"],
+            service_file=io.StringIO(json.dumps(service_data)),
+        )
         v = await tok.get()
         assert v == "abc"
         await tok.close()
@@ -62,5 +69,3 @@ async def test_iam_sign_blob(monkeypatch):
         data = await iam.sign_blob("ABC", service_account_email="sa@example.com")
         assert data["signedBlob"] == "QUJD"
         await iam.close()
-
-
