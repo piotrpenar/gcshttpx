@@ -11,13 +11,13 @@ import datetime
 import enum
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, AnyStr, Dict, IO, List, Mapping, Optional, Union
+from typing import IO, Any, AnyStr
 
 import httpx
 import jwt
 import orjson
-
 
 # Public exports
 __all__ = [
@@ -33,7 +33,7 @@ __all__ = [
 # Session wrapper
 Response = httpx.Response
 Session = httpx.AsyncClient
-Timeout = Union[httpx.Timeout, float]
+Timeout = httpx.Timeout | float
 
 
 async def _raise_for_status(resp: httpx.Response) -> None:
@@ -47,7 +47,7 @@ async def _raise_for_status(resp: httpx.Response) -> None:
 class AioSession:
     def __init__(
         self,
-        session: Optional[Session] = None,
+        session: Session | None = None,
         *,
         timeout: Timeout = 10,
         verify_ssl: bool = True,
@@ -79,8 +79,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Optional[Mapping[str, str]] = None,
-        params: Optional[Mapping[str, Union[int, str]]] = None,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, int | str] | None = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -93,9 +93,9 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Optional[Mapping[str, str]] = None,
-        data: Optional[Union[bytes, str, IO[AnyStr]]] = None,
-        params: Optional[Mapping[str, Union[int, str]]] = None,
+        headers: Mapping[str, str] | None = None,
+        data: bytes | str | IO[AnyStr] | None = None,
+        params: Mapping[str, int | str] | None = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -108,9 +108,9 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Optional[Mapping[str, str]] = None,
-        data: Optional[Union[bytes, str]] = None,
-        params: Optional[Mapping[str, Union[int, str]]] = None,
+        headers: Mapping[str, str] | None = None,
+        data: bytes | str | None = None,
+        params: Mapping[str, int | str] | None = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -123,8 +123,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Optional[Mapping[str, str]] = None,
-        data: Union[bytes, str, IO[Any]],
+        headers: Mapping[str, str] | None = None,
+        data: bytes | str | IO[Any],
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -137,8 +137,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Optional[Mapping[str, str]] = None,
-        params: Optional[Mapping[str, Union[int, str]]] = None,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, int | str] | None = None,
         timeout: Timeout = 10,
     ) -> Response:
         if not isinstance(timeout, httpx.Timeout):
@@ -151,8 +151,8 @@ class AioSession:
         self,
         url: str,
         *,
-        headers: Optional[Mapping[str, str]] = None,
-        params: Optional[Mapping[str, Union[int, str]]] = None,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, int | str] | None = None,
         timeout: Timeout = 10,
         allow_redirects: bool = False,
     ) -> Response:
@@ -197,13 +197,13 @@ def decode(payload: str) -> bytes:
     return base64.b64decode(payload, altchars=b"-_")
 
 
-def encode(payload: Union[bytes, str]) -> bytes:
+def encode(payload: bytes | str) -> bytes:
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
     return base64.b64encode(payload, altchars=b"-_")
 
 
-def get_service_data(service: Optional[Union[str, IO[AnyStr]]]) -> Dict[str, Any]:
+def get_service_data(service: str | IO[AnyStr] | None) -> dict[str, Any]:
     service = service or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if not service:
         # Try gcloud ADC path on disk
@@ -213,7 +213,7 @@ def get_service_data(service: Optional[Union[str, IO[AnyStr]]]) -> Dict[str, Any
             sdkpath = (
                 os.path.join(os.environ.get("APPDATA", ""), "gcloud")
                 if os.environ.get("APPDATA")
-                else os.path.join(os.environ.get("SystemDrive", "C:"), "\\", "gcloud")
+                else os.path.join(os.environ.get("SYSTEMDRIVE", "C:"), "\\", "gcloud")
             )
         cred_path = os.path.join(sdkpath, "application_default_credentials.json")
         try:
@@ -245,8 +245,8 @@ class TokenResponse:
 class BaseToken:
     def __init__(
         self,
-        service_file: Optional[Union[str, IO[AnyStr]]] = None,
-        session: Optional[Session] = None,
+        service_file: str | IO[AnyStr] | None = None,
+        session: Session | None = None,
         *,
         background_refresh_after: float = 0.5,
         force_refresh_after: float = 0.95,
@@ -270,16 +270,16 @@ class BaseToken:
             self.token_uri = GCE_ENDPOINT_TOKEN
 
         self.session = AioSession(session)
-        self.access_token: Optional[str] = None
+        self.access_token: str | None = None
         self.access_token_duration = 0
         self.access_token_acquired_at = datetime.datetime(
             1970, 1, 1, tzinfo=datetime.timezone.utc
         )
         self.access_token_preempt_after = 0
         self.access_token_refresh_after = 0
-        self.acquiring: Optional["asyncio.Task[None]"] = None
+        self.acquiring: asyncio.Task[None] | None = None
 
-    async def get_project(self) -> Optional[str]:
+    async def get_project(self) -> str | None:
         project = (
             os.environ.get("GOOGLE_CLOUD_PROJECT")
             or os.environ.get("GCLOUD_PROJECT")
@@ -300,7 +300,7 @@ class BaseToken:
             return self.service_data.get("project_id")
         return None
 
-    async def get(self) -> Optional[str]:
+    async def get(self) -> str | None:
         await self.ensure_token()
         return self.access_token
 
@@ -341,7 +341,7 @@ class BaseToken:
     async def close(self) -> None:
         await self.session.close()
 
-    async def __aenter__(self) -> "BaseToken":
+    async def __aenter__(self) -> BaseToken:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -353,9 +353,9 @@ class Token(BaseToken):
 
     def __init__(
         self,
-        service_file: Optional[Union[str, IO[AnyStr]]] = None,
-        session: Optional[Session] = None,
-        scopes: Optional[List[str]] = None,
+        service_file: str | IO[AnyStr] | None = None,
+        session: Session | None = None,
+        scopes: list[str] | None = None,
     ) -> None:
         super().__init__(service_file=service_file, session=session)
         self.scopes = " ".join(scopes or []) if scopes else ""
@@ -434,9 +434,9 @@ class IamClient:
     def __init__(
         self,
         *,
-        service_file: Optional[Union[str, IO[AnyStr]]] = None,
-        session: Optional[Session] = None,
-        token: Optional[Token] = None,
+        service_file: str | IO[AnyStr] | None = None,
+        session: Session | None = None,
+        token: Token | None = None,
     ) -> None:
         self.session = AioSession(session)
         self.token = token or Token(
@@ -445,22 +445,22 @@ class IamClient:
             scopes=["https://www.googleapis.com/auth/iam"],
         )
 
-    async def _headers(self) -> Dict[str, str]:
+    async def _headers(self) -> dict[str, str]:
         tok = await self.token.get()
         return {"Authorization": f"Bearer {tok}"}
 
     @property
-    def service_account_email(self) -> Optional[str]:
+    def service_account_email(self) -> str | None:
         return self.token.service_data.get("client_email")
 
     async def sign_blob(
         self,
-        payload: Optional[Union[str, bytes]],
+        payload: str | bytes | None,
         *,
-        service_account_email: Optional[str] = None,
-        delegates: Optional[List[str]] = None,
+        service_account_email: str | None = None,
+        delegates: list[str] | None = None,
         timeout: int = 10,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         sa_email = service_account_email or self.service_account_email
         if not sa_email:
             raise TypeError("service_account_email is required for sign_blob")
@@ -482,7 +482,7 @@ class IamClient:
     async def close(self) -> None:
         await self.session.close()
 
-    async def __aenter__(self) -> "IamClient":
+    async def __aenter__(self) -> IamClient:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
