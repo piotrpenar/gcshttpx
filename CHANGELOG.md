@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [0.1.0] - 2024-10-02
 
-Initial release of **gcs-httpx** - a minimal, secure async Google Cloud Storage client built on httpx with native HTTP/2 support.
+Initial release of **gcshttpx** - a minimal, secure async Google Cloud Storage client built on httpx with native HTTP/2 support.
 
 ### Features
 

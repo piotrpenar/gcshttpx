@@ -1,13 +1,13 @@
-# gcs-httpx
+# gcshttpx
 
 **Minimal, secure async Google Cloud Storage client built on httpx with native HTTP/2 support.**
 
-[![CI](https://github.com/piotrpenar/gcs-httpx/workflows/CI/badge.svg)](https://github.com/piotrpenar/gcs-httpx/actions)
-[![PyPI](https://img.shields.io/pypi/v/gcs-httpx.svg)](https://pypi.org/project/gcs-httpx/)
-[![Python](https://img.shields.io/pypi/pyversions/gcs-httpx.svg)](https://pypi.org/project/gcs-httpx/)
+[![CI](https://github.com/piotrpenar/gcshttpx/workflows/CI/badge.svg)](https://github.com/piotrpenar/gcshttpx/actions)
+[![PyPI](https://img.shields.io/pypi/v/gcshttpx.svg)](https://pypi.org/project/gcshttpx/)
+[![Python](https://img.shields.io/pypi/pyversions/gcshttpx.svg)](https://pypi.org/project/gcshttpx/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Why gcs-httpx?
+## Why gcshttpx?
 
 - **🚀 Fast**: Built on httpx with HTTP/2 support for connection multiplexing
 - **🔒 Secure**: Explicit credential handling, no automatic filesystem searches
@@ -20,10 +20,10 @@
 
 ```bash
 # Using uv (recommended)
-uv add gcs-httpx
+uv add gcshttpx
 
 # Using pip
-pip install gcs-httpx
+pip install gcshttpx
 ```
 
 ## Quick Start
@@ -110,7 +110,7 @@ token = Token(scopes=["https://www.googleapis.com/auth/cloud-platform"])
 
 ### Security Notes
 
-⚠️ **gcs-httpx takes security seriously:**
+⚠️ **gcshttpx takes security seriously:**
 
 - **HTTPS-only token endpoints**: Prevents credential leakage
 - **Input validation**: All credentials are validated before use
@@ -341,8 +341,8 @@ except ValueError as e:
 
 ```bash
 # Clone repository
-git clone https://github.com/piotrpenar/gcs-httpx.git
-cd gcs-httpx
+git clone https://github.com/piotrpenar/gcshttpx.git
+cd gcshttpx
 
 # Install with uv
 uv sync
@@ -381,9 +381,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Links
 
-- **Documentation**: [README.md](https://github.com/piotrpenar/gcs-httpx)
-- **Source Code**: [GitHub](https://github.com/piotrpenar/gcs-httpx)
-- **Issue Tracker**: [GitHub Issues](https://github.com/piotrpenar/gcs-httpx/issues)
-- **PyPI**: [gcs-httpx](https://pypi.org/project/gcs-httpx/)
+- **Documentation**: [README.md](https://github.com/piotrpenar/gcshttpx)
+- **Source Code**: [GitHub](https://github.com/piotrpenar/gcshttpx)
+- **Issue Tracker**: [GitHub Issues](https://github.com/piotrpenar/gcshttpx/issues)
+- **PyPI**: [gcshttpx](https://pypi.org/project/gcshttpx/)
 
 

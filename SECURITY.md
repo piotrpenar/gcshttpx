@@ -10,7 +10,7 @@
 
 ### Explicit Credential Handling
 
-**gcs-httpx** prioritizes security through explicit credential management:
+**gcshttpx** prioritizes security through explicit credential management:
 
 #### ✅ What We Do
 
@@ -95,7 +95,7 @@ token = Token(scopes=["https://www.googleapis.com/auth/cloud-platform"])
 
 ### HTTP/2 Security
 
-gcs-httpx uses HTTP/2 by default, which provides:
+gcshttpx uses HTTP/2 by default, which provides:
 
 - TLS 1.2+ requirement
 - Binary framing (more secure parsing)
@@ -164,7 +164,7 @@ All dependencies are pinned to minimum versions and regularly updated.
 - [ ] Use least-privilege scopes (not always `cloud-platform`)
 - [ ] Enable GCP audit logging for storage access
 - [ ] Use VPC Service Controls for additional protection
-- [ ] Keep gcs-httpx and dependencies updated
+- [ ] Keep gcshttpx and dependencies updated
 - [ ] Review GCP IAM permissions regularly
 
 ## Related Security Resources
