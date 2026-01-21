@@ -65,7 +65,8 @@ async def test_iam_sign_blob(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, http2=True) as client:
-        iam = IamClient(session=client, token=Token(session=client, scopes=["iam"]))
+        # use_adc=False to force metadata server path in test
+        iam = IamClient(session=client, token=Token(session=client, scopes=["iam"], use_adc=False))
         data = await iam.sign_blob("ABC", service_account_email="sa@example.com")
         assert data["signedBlob"] == "QUJD"
         await iam.close()

@@ -200,6 +200,10 @@ GCE_ENDPOINT_PROJECT = f"{GCE_METADATA_BASE}/project/project-id"
 GCE_ENDPOINT_TOKEN = (
     f"{GCE_METADATA_BASE}/instance/service-accounts/default/token?recursive=true"
 )
+GCE_ENDPOINT_EMAIL = f"{GCE_METADATA_BASE}/instance/service-accounts/default/email"
+GCE_ENDPOINT_ID_TOKEN = (
+    f"{GCE_METADATA_BASE}/instance/service-accounts/default/identity?audience={{audience}}"
+)
 GCLOUD_ENDPOINT_GENERATE_ACCESS_TOKEN = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{service_account}:generateAccessToken"
 GCLOUD_ENDPOINT_GENERATE_ID_TOKEN = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{service_account}:generateIdToken"
 
@@ -214,51 +218,65 @@ def encode(payload: bytes | str) -> bytes:
     return base64.b64encode(payload, altchars=b"-_")
 
 
-def get_service_data(service: str | IO[AnyStr] | None) -> dict[str, Any]:
-    """
-    Load service account credentials from explicit sources only.
+def _get_adc_path() -> str:
+    """Get the well-known ADC credentials file path."""
+    if os.name != "nt":
+        return os.path.join(
+            os.path.expanduser("~"), ".config", "gcloud", "application_default_credentials.json"
+        )
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        return os.path.join(appdata, "gcloud", "application_default_credentials.json")
+    return os.path.join(
+        os.environ.get("SYSTEMDRIVE", "C:"), "gcloud", "application_default_credentials.json"
+    )
 
-    Security: This function will ONLY load credentials from:
-    1. Explicitly provided file path (service parameter)
-    2. Explicitly provided file-like object (service parameter)
-    3. GOOGLE_APPLICATION_CREDENTIALS environment variable (if service is None)
 
-    It will NOT automatically search filesystem locations or use system directories.
-    Returns empty dict if no valid credentials are found.
-    """
-    # Only check GOOGLE_APPLICATION_CREDENTIALS if no explicit service provided
-    if service is None:
-        service = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-
-    if not service:
-        return {}
-
+def _load_credentials_file(source: str | IO[AnyStr]) -> dict[str, Any]:
+    """Load and validate credentials from file path or file-like object."""
     try:
-        # Attempt reading string path first
-        with open(service, encoding="utf-8") as f:  # type: ignore[arg-type]
-            data = orjson.loads(f.read())
-            # Validate it's a proper service account JSON
-            if not isinstance(data, dict):
-                return {}
-            return data
+        with open(source, encoding="utf-8") as f:  # type: ignore[arg-type]
+            data = orjson.loads(f.read())  # type: ignore[attr-defined]
+            return data if isinstance(data, dict) else {}
     except (TypeError, AttributeError):
-        # file-like object
         try:
-            content = service.read()  # type: ignore[union-attr]
+            content = source.read()  # type: ignore[union-attr]
             if isinstance(content, bytes):
-                data = orjson.loads(content)
+                data = orjson.loads(content)  # type: ignore[attr-defined]
             else:
-                data = orjson.loads(content.encode("utf-8"))
-            if not isinstance(data, dict):
-                return {}
-            return data
+                data = orjson.loads(content.encode("utf-8"))  # type: ignore[attr-defined]
+            return data if isinstance(data, dict) else {}
         except Exception:
             return {}
-    except (FileNotFoundError, PermissionError, OSError):
-        # Explicit file errors - don't silently ignore
-        return {}
     except Exception:
         return {}
+
+
+def get_service_data(
+    service: str | IO[AnyStr] | None = None,
+    *,
+    use_adc: bool = True,
+) -> dict[str, Any]:
+    """
+    Load credentials following ADC search order:
+    1. Explicitly provided file path or file-like object
+    2. GOOGLE_APPLICATION_CREDENTIALS environment variable
+    3. Well-known ADC file (if use_adc=True)
+    4. Returns {} to trigger metadata server fallback
+    """
+    if service is not None:
+        return _load_credentials_file(service)
+
+    env_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if env_path:
+        return _load_credentials_file(env_path)
+
+    if use_adc:
+        adc_path = _get_adc_path()
+        if os.path.exists(adc_path):
+            return _load_credentials_file(adc_path)
+
+    return {}
 
 
 @dataclass
@@ -273,6 +291,7 @@ class BaseToken:
         service_file: str | IO[AnyStr] | None = None,
         session: Session | None = None,
         *,
+        use_adc: bool = True,
         background_refresh_after: float = 0.5,
         force_refresh_after: float = 0.95,
     ) -> None:
@@ -288,7 +307,7 @@ class BaseToken:
         self.background_refresh_after = background_refresh_after
         self.force_refresh_after = force_refresh_after
 
-        self.service_data = get_service_data(service_file)
+        self.service_data = get_service_data(service_file, use_adc=use_adc)
         if self.service_data:
             # Validate required fields for service account
             if "type" not in self.service_data:
@@ -342,6 +361,15 @@ class BaseToken:
                 return str(resp.text)
         if self.token_type == Type.SERVICE_ACCOUNT:
             return self.service_data.get("project_id")
+        return None
+
+    async def get_service_account_email(self) -> str | None:
+        """Get service account email from credentials or metadata server."""
+        if self.service_data:
+            return self.service_data.get("client_email")
+        if self.token_type == Type.GCE_METADATA:
+            resp = await self.session.get(GCE_ENDPOINT_EMAIL, headers=GCE_METADATA_HEADERS)
+            return resp.text.strip()
         return None
 
     async def get(self) -> str | None:
@@ -400,8 +428,10 @@ class Token(BaseToken):
         service_file: str | IO[AnyStr] | None = None,
         session: Session | None = None,
         scopes: list[str] | None = None,
+        *,
+        use_adc: bool = True,
     ) -> None:
-        super().__init__(service_file=service_file, session=session)
+        super().__init__(service_file=service_file, session=session, use_adc=use_adc)
         self.scopes = " ".join(scopes or []) if scopes else ""
 
     async def _refresh_authorized_user(self, timeout: int) -> TokenResponse:
@@ -414,17 +444,15 @@ class Token(BaseToken):
                 f"Invalid authorized_user credentials: missing {', '.join(missing)}"
             )
 
-        payload = httpx.QueryParams(
-            {
-                "grant_type": "refresh_token",
-                "client_id": self.service_data["client_id"],
-                "client_secret": self.service_data["client_secret"],
-                "refresh_token": self.service_data["refresh_token"],
-            }
-        ).encode()
+        form_data = {
+            "grant_type": "refresh_token",
+            "client_id": self.service_data["client_id"],
+            "client_secret": self.service_data["client_secret"],
+            "refresh_token": self.service_data["refresh_token"],
+        }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         resp = await self.session.post(
-            self.token_uri, data=payload, headers=headers, timeout=timeout
+            self.token_uri, data=form_data, headers=headers, timeout=timeout
         )
         data = resp.json()
         if "access_token" not in data or "expires_in" not in data:
@@ -491,6 +519,37 @@ class Token(BaseToken):
         expires = int(data.get("expires_in", "0") or self.default_token_ttl)
         return TokenResponse(value=token_value, expires_in=expires)
 
+    async def get_id_token(self, audience: str, *, timeout: int = 10) -> str:
+        """
+        Get an ID token for service-to-service authentication.
+
+        Args:
+            audience: The target service URL (e.g., "https://my-service.run.app")
+
+        Returns:
+            JWT ID token for the specified audience
+        """
+        if self.token_type == Type.GCE_METADATA:
+            url = GCE_ENDPOINT_ID_TOKEN.format(audience=audience)
+            resp = await self.session.get(url, headers=GCE_METADATA_HEADERS, timeout=timeout)
+            return resp.text.strip()
+
+        if self.token_type == Type.SERVICE_ACCOUNT:
+            return await self._generate_id_token_iam(audience, timeout)
+
+        raise RuntimeError(f"ID tokens not supported for {self.token_type}")
+
+    async def _generate_id_token_iam(self, audience: str, timeout: int) -> str:
+        """Generate ID token using IAM credentials API."""
+        assert self.service_data
+        email = self.service_data["client_email"]
+        url = GCLOUD_ENDPOINT_GENERATE_ID_TOKEN.format(service_account=email)
+        access_token = await self.get()
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        body = orjson.dumps({"audience": audience, "includeEmail": True})
+        resp = await self.session.post(url, data=body, headers=headers, timeout=timeout)
+        return resp.json()["token"]
+
     async def refresh(self, *, timeout: int) -> TokenResponse:  # type: ignore[override]
         if self.token_type == Type.AUTHORIZED_USER:
             return await self._refresh_authorized_user(timeout)
@@ -524,7 +583,12 @@ class IamClient:
 
     @property
     def service_account_email(self) -> str | None:
+        """Get email from credentials (sync). Use get_service_account_email() for metadata."""
         return self.token.service_data.get("client_email")
+
+    async def get_service_account_email(self) -> str | None:
+        """Get service account email, fetching from metadata if needed."""
+        return await self.token.get_service_account_email()
 
     async def sign_blob(
         self,
@@ -534,7 +598,7 @@ class IamClient:
         delegates: list[str] | None = None,
         timeout: int = 10,
     ) -> dict[str, str]:
-        sa_email = service_account_email or self.service_account_email
+        sa_email = service_account_email or await self.get_service_account_email()
         if not sa_email:
             raise TypeError("service_account_email is required for sign_blob")
         resource_name = f"projects/-/serviceAccounts/{sa_email}"

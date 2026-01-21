@@ -3,6 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from gcshttpx.auth import IamClient, Token
 from gcshttpx.storage import Blob, Storage
 
 
@@ -208,9 +209,11 @@ async def test_blob_helpers_and_signed_url_iam_path():
         # upload through Blob
         md = await blob.upload(b"data", content_type="application/octet-stream")
         assert md["name"] == "obj"
-        # signed url (IAM path)
+        # signed url (IAM path) - use_adc=False to force metadata path in test
+        iam = IamClient(session=client, token=Token(session=client, scopes=["iam"], use_adc=False))
         url = await blob.get_signed_url(
-            60, iam_client=None, service_account_email="sa@example.com", session=client
+            60, iam_client=iam, service_account_email="sa@example.com", session=client
         )
         assert "X-Goog-Signature=414243" in url
+        await iam.close()
         await s.close()

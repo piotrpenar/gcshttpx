@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Added
+-
+
+## [0.1.4]
+
+### Added
+- Application Default Credentials (ADC) well-known file discovery (`~/.config/gcloud/application_default_credentials.json`)
+- `Token.get_id_token(audience)` for service-to-service authentication on Cloud Run
+- `Token.get_service_account_email()` to fetch email from credentials or metadata server
+- `IamClient.get_service_account_email()` async method for metadata-based email lookup
+- `use_adc` parameter on `Token` to control ADC discovery (default `True`)
+- New metadata endpoints: `GCE_ENDPOINT_EMAIL`, `GCE_ENDPOINT_ID_TOKEN`
+
+### Changed
+- `IamClient.sign_blob()` now auto-fetches service account email from metadata when not provided
+
 ## [0.1.0] - 2024-10-02
 
 Initial release of **gcshttpx** - a minimal, secure async Google Cloud Storage client built on httpx with native HTTP/2 support.
