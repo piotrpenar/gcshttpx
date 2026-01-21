@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 -
 
-## [0.1.4]
+## [0.1.5]
 
 ### Added
 - Application Default Credentials (ADC) well-known file discovery (`~/.config/gcloud/application_default_credentials.json`)

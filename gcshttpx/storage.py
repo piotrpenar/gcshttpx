@@ -34,7 +34,10 @@ ResponseError = httpx.HTTPStatusError
 
 DEFAULT_TIMEOUT = 10
 MAX_CONTENT_LENGTH_SIMPLE_UPLOAD = 5 * 1024 * 1024  # 5 MB
-SCOPES = ["https://www.googleapis.com/auth/devstorage.read_write"]
+SCOPES = [
+    "https://www.googleapis.com/auth/devstorage.read_write",
+    "https://www.googleapis.com/auth/iam",  # Required for SignBlob (signed URLs)
+]
 
 
 def _init_api_root(api_root: str | None) -> tuple[bool, str]:

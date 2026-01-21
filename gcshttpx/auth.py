@@ -188,6 +188,7 @@ class Type(enum.Enum):
     AUTHORIZED_USER = "authorized_user"
     GCE_METADATA = "gce_metadata"
     SERVICE_ACCOUNT = "service_account"
+    IMPERSONATED_SERVICE_ACCOUNT = "impersonated_service_account"
 
 
 # Environment and endpoints
@@ -308,6 +309,11 @@ class BaseToken:
         self.force_refresh_after = force_refresh_after
 
         self.service_data = get_service_data(service_file, use_adc=use_adc)
+        # For impersonated credentials, store additional fields
+        self._impersonation_url: str | None = None
+        self._impersonated_email: str | None = None
+        self._source_credentials: dict[str, Any] | None = None
+
         if self.service_data:
             # Validate required fields for service account
             if "type" not in self.service_data:
@@ -319,9 +325,13 @@ class BaseToken:
                     f"Invalid service account type: {self.service_data['type']}"
                 ) from e
 
-            self.token_uri = self.service_data.get(
-                "token_uri", "https://oauth2.googleapis.com/token"
-            )
+            # Handle impersonated_service_account type
+            if self.token_type == Type.IMPERSONATED_SERVICE_ACCOUNT:
+                self._init_impersonated_credentials()
+            else:
+                self.token_uri = self.service_data.get(
+                    "token_uri", "https://oauth2.googleapis.com/token"
+                )
 
             # Validate token_uri is HTTPS
             if not self.token_uri.startswith("https://"):
@@ -341,6 +351,23 @@ class BaseToken:
         self.access_token_preempt_after = 0
         self.access_token_refresh_after = 0
         self.acquiring: asyncio.Task[None] | None = None
+
+    def _init_impersonated_credentials(self) -> None:
+        """Initialize fields for impersonated_service_account credentials."""
+        self._impersonation_url = self.service_data.get("service_account_impersonation_url")
+        if not self._impersonation_url:
+            raise ValueError("Missing service_account_impersonation_url for impersonated credentials")
+        # Extract service account email from URL
+        # URL format: .../serviceAccounts/EMAIL:generateAccessToken
+        try:
+            self._impersonated_email = self._impersonation_url.split("/serviceAccounts/")[1].split(":")[0]
+        except (IndexError, AttributeError) as e:
+            raise ValueError(f"Cannot extract service account email from URL: {self._impersonation_url}") from e
+        self._source_credentials = self.service_data.get("source_credentials")
+        if not self._source_credentials:
+            raise ValueError("Missing source_credentials for impersonated credentials")
+        # Use source credentials' token_uri
+        self.token_uri = self._source_credentials.get("token_uri", "https://oauth2.googleapis.com/token")
 
     async def get_project(self) -> str | None:
         project = (
@@ -365,6 +392,9 @@ class BaseToken:
 
     async def get_service_account_email(self) -> str | None:
         """Get service account email from credentials or metadata server."""
+        # For impersonated credentials, return the target service account email
+        if self.token_type == Type.IMPERSONATED_SERVICE_ACCOUNT:
+            return self._impersonated_email
         if self.service_data:
             return self.service_data.get("client_email")
         if self.token_type == Type.GCE_METADATA:
@@ -550,6 +580,71 @@ class Token(BaseToken):
         resp = await self.session.post(url, data=body, headers=headers, timeout=timeout)
         return resp.json()["token"]
 
+    async def _refresh_impersonated(self, timeout: int) -> TokenResponse:
+        """Refresh token using service account impersonation.
+
+        Flow:
+        1. Get source token using source_credentials (authorized_user)
+        2. Use source token to call IAM Credentials API to get impersonated token
+        """
+        assert self._source_credentials
+        assert self._impersonation_url
+
+        # Step 1: Get source token from authorized_user credentials
+        source_creds = self._source_credentials
+        required = ["client_id", "client_secret", "refresh_token"]
+        missing = [f for f in required if f not in source_creds]
+        if missing:
+            raise ValueError(f"Invalid source_credentials: missing {', '.join(missing)}")
+
+        form_data = {
+            "grant_type": "refresh_token",
+            "client_id": source_creds["client_id"],
+            "client_secret": source_creds["client_secret"],
+            "refresh_token": source_creds["refresh_token"],
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        source_token_uri = source_creds.get("token_uri", "https://oauth2.googleapis.com/token")
+        resp = await self.session.post(source_token_uri, data=form_data, headers=headers, timeout=timeout)
+        source_data = resp.json()
+        if "access_token" not in source_data:
+            raise ValueError("Failed to get source access token")
+        source_token = source_data["access_token"]
+
+        # Step 2: Use source token to get impersonated token via IAM Credentials API
+        impersonate_headers = {
+            "Authorization": f"Bearer {source_token}",
+            "Content-Type": "application/json",
+        }
+        # Build request body with scopes if available
+        body: dict[str, Any] = {"lifetime": "3600s"}
+        if self.scopes:
+            body["scope"] = self.scopes.split()
+
+        body_bytes = orjson.dumps(body)
+        resp = await self.session.post(
+            self._impersonation_url,
+            data=body_bytes,
+            headers=impersonate_headers,
+            timeout=timeout,
+        )
+        data = resp.json()
+        if "accessToken" not in data:
+            raise ValueError(f"Failed to get impersonated token: {data}")
+
+        # Parse expireTime to calculate expires_in
+        # Format: "2024-01-21T12:00:00Z"
+        expires_in = 3600  # default
+        if "expireTime" in data:
+            try:
+                expire_time = datetime.datetime.fromisoformat(data["expireTime"].replace("Z", "+00:00"))
+                now = datetime.datetime.now(datetime.timezone.utc)
+                expires_in = int((expire_time - now).total_seconds())
+            except Exception:
+                pass
+
+        return TokenResponse(value=str(data["accessToken"]), expires_in=expires_in)
+
     async def refresh(self, *, timeout: int) -> TokenResponse:  # type: ignore[override]
         if self.token_type == Type.AUTHORIZED_USER:
             return await self._refresh_authorized_user(timeout)
@@ -557,6 +652,8 @@ class Token(BaseToken):
             return await self._refresh_gce_metadata(timeout)
         if self.token_type == Type.SERVICE_ACCOUNT:
             return await self._refresh_service_account(timeout)
+        if self.token_type == Type.IMPERSONATED_SERVICE_ACCOUNT:
+            return await self._refresh_impersonated(timeout)
         raise RuntimeError(f"unsupported token type: {self.token_type}")
 
 
