@@ -871,14 +871,19 @@ class Blob:
         request_timestamp = datetime_now.strftime("%Y%m%dT%H%M%SZ")
         datestamp = datetime_now.strftime("%Y%m%d")
         token = token or self.bucket.storage.token
-        client_email = (
-            token.service_data.get("client_email") if token.service_data else None
-        )
+        # Get service account email - must handle impersonated credentials properly
+        client_email = service_account_email or await token.get_service_account_email()
+        if not client_email:
+            raise ValueError(
+                "Cannot determine service account email for signing. "
+                "For impersonated credentials, ensure service_account_impersonation_url is set. "
+                "For metadata credentials, ensure the metadata server is accessible."
+            )
         private_key = (
             token.service_data.get("private_key") if token.service_data else None
         )
         credential_scope = f"{datestamp}/auto/storage/goog4_request"
-        credential = f"{(service_account_email or client_email)}/{credential_scope}"
+        credential = f"{client_email}/{credential_scope}"
         host = os.environ.get("STORAGE_EMULATOR_HOST", "storage.googleapis.com")
         headers = dict(headers or {})
         headers["host"] = host
@@ -936,7 +941,7 @@ class Blob:
             provided_session = bool(iam_client or session)
             iam_client = iam_client or IamClient(token=token, session=session)
             signed_resp = await iam_client.sign_blob(
-                string_to_sign, service_account_email=service_account_email
+                string_to_sign, service_account_email=client_email
             )
             signature_hex = binascii.hexlify(
                 base64.urlsafe_b64decode(signed_resp["signedBlob"])

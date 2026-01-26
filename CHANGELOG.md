@@ -2,10 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [0.1.6]
 
-### Added
--
+### Fixed
+- `Blob.get_signed_url()` now correctly retrieves service account email for impersonated credentials using `token.get_service_account_email()` instead of accessing `service_data["client_email"]` directly, which was returning `None` for `IMPERSONATED_SERVICE_ACCOUNT` credential type
 
 ## [0.1.5]
 
