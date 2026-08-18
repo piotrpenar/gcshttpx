@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-from .auth import AioSession, IamClient, Token
+from .auth import AioSession, IamClient, OffloadLoop, ShiftedAioSession, Token
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +85,10 @@ class StreamResponse:
     def content_length(self) -> int:
         return int(self._response.headers.get("content-length", 0))
 
+    @property
+    def content_encoding(self) -> str:
+        return self._response.headers.get("content-encoding", "")
+
     async def read(self, size: int = -1) -> bytes:
         if self._stream_iter is None:
             if size > 0:
@@ -116,6 +120,7 @@ class Storage:
         token: Token | None = None,
         session: Session | None = None,
         api_root: str | None = None,
+        offload: bool | OffloadLoop = False,
     ) -> None:
         self._api_is_dev, self._api_root = _init_api_root(api_root)
         self._api_root_read = f"{self._api_root}/storage/v1/b"
@@ -125,6 +130,29 @@ class Storage:
         self.token = token or Token(
             service_file=service_file, scopes=SCOPES, session=self.session.session
         )
+        # Offload: the same AioSession request logic runs on a side event loop,
+        # keeping this loop free of request-body/TLS/framing work. The env
+        # opt-in never overrides a caller-provided shared session, whose
+        # (possibly mock) transport offloading would silently bypass.
+        self._owns_offload = False
+        self._offload: OffloadLoop | None = None
+        if isinstance(offload, OffloadLoop):
+            self._offload = offload
+        elif offload or (session is None and os.environ.get("GCSHTTPX_OFFLOAD") == "1"):
+            self._offload = OffloadLoop()
+            self._owns_offload = True
+        self._shifted = (
+            ShiftedAioSession(self._offload, verify_ssl=not self._api_is_dev)
+            if self._offload
+            else None
+        )
+
+    def _io(self, session: Session | None) -> AioSession:
+        """Route a request: explicit sessions always use the caller's loop;
+        otherwise the offloaded session carries the request when enabled."""
+        if session:
+            return AioSession(session)
+        return self._shifted or self.session
 
     async def _headers(self) -> dict[str, str]:
         if self._api_is_dev:
@@ -141,12 +169,14 @@ class Storage:
         session: Session | None = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> list[Bucket]:
-        url = f"{self._api_root_read}?project={project}"
+        url = self._api_root_read
         headers = {**(headers or {}), **(await self._headers())}
-        params = dict(params or {})
+        # Request-level params replace the URL query string, so project must
+        # ride in the params dict; embedded in the URL it would be dropped.
+        params = {"project": project, **dict(params or {})}
         if not params.get("pageToken"):
             params["pageToken"] = ""
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         buckets: list[Bucket] = []
         while True:
             resp = await s.get(url, headers=headers, params=params, timeout=timeout)
@@ -196,7 +226,7 @@ class Storage:
                 "Content-Length": str(len(body)),
             }
         )
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         params = params or {}
         resp = await s.post(
             url, headers=headers, params=params, timeout=timeout, data=body
@@ -219,11 +249,14 @@ class Storage:
         params: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
         session: Session | None = None,
+        if_generation_match: int | None = None,
     ) -> str:
         encoded = quote(object_name, safe="")
         url = f"{self._api_root_read}/{bucket}/o/{encoded}"
+        if if_generation_match is not None:
+            params = {**(params or {}), "ifGenerationMatch": str(if_generation_match)}
         headers = {**(headers or {}), **(await self._headers())}
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         resp = await s.delete(
             url, headers=headers, params=params or {}, timeout=timeout
         )
@@ -309,7 +342,7 @@ class Storage:
     ) -> dict[str, Any]:
         url = f"{self._api_root_read}/{bucket}/o"
         headers = {**(headers or {}), **(await self._headers())}
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         resp = await s.get(url, headers=headers, params=params or {}, timeout=timeout)
         return resp.json()
 
@@ -326,13 +359,21 @@ class Storage:
         session: Session | None = None,
         force_resumable_upload: bool | None = None,
         zipped: bool = False,
+        if_generation_match: int | None = None,
         timeout: int = 30,
     ) -> dict[str, Any]:
         url = f"{self._api_root_write}/{bucket}/o"
         stream = self._preprocess_data(file_data)
         params = dict(parameters or {})
+        if if_generation_match is not None:
+            # ifGenerationMatch=0 turns the upload into create-if-absent: a 412
+            # response means the object already exists — no preflight HEAD needed.
+            params["ifGenerationMatch"] = str(if_generation_match)
         if zipped:
-            stream = self._compress_file_in_chunks(stream)
+            if self._shifted is not None:
+                stream = await _asyncio.to_thread(self._compress_file_in_chunks, stream)
+            else:
+                stream = self._compress_file_in_chunks(stream)
             params["contentEncoding"] = "gzip"
         content_length = self._get_stream_len(stream)
         content_type = content_type or mimetypes.guess_type(object_name)[0] or ""
@@ -411,7 +452,7 @@ class Storage:
                 "Content-Length": str(len(body)),
             }
         )
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         resp = await s.post(
             url, headers=headers, params=params or {}, timeout=timeout, data=body
         )
@@ -494,7 +535,7 @@ class Storage:
     ) -> bytes:
         url = f"{self._api_root_read}/{bucket}/o/{quote(object_name, safe='')}"
         headers = {**(headers or {}), **(await self._headers())}
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         resp = await s.get(url, headers=headers, params=params or {}, timeout=timeout)
         return resp.content
 
@@ -510,6 +551,8 @@ class Storage:
     ) -> StreamResponse:
         url = f"{self._api_root_read}/{bucket}/o/{quote(object_name, safe='')}"
         headers = {**(headers or {}), **(await self._headers())}
+        # Streams stay on the event loop: the response is iterated where it is
+        # consumed, so it must live on the loop's AsyncClient, never a worker's.
         s = AioSession(session) if session else self.session
         resp = await s.get(url, headers=headers, params=params or {}, timeout=timeout)
         return StreamResponse(resp)
@@ -528,7 +571,7 @@ class Storage:
         params = dict(params)
         params["name"] = object_name
         params["uploadType"] = "media"
-        s = self.session if not session else AioSession(session)
+        s = self._io(session)
         resp = await s.post(
             url, data=stream, headers=headers, params=params, timeout=timeout
         )
@@ -579,7 +622,7 @@ class Storage:
                 "Accept": "application/json",
             }
         )
-        s = self.session if not session else AioSession(session)
+        s = self._io(session)
         resp = await s.post(
             url, data=body, headers=headers, params=params, timeout=timeout
         )
@@ -598,7 +641,13 @@ class Storage:
         timeout: int = 30,
     ) -> dict[str, Any]:
         session_uri = await self._initiate_upload(
-            url, object_name, params, headers, metadata=metadata
+            url,
+            object_name,
+            params,
+            headers,
+            metadata=metadata,
+            session=session,
+            timeout=timeout,
         )
         return await self._do_upload(
             session_uri, stream, headers=headers, session=session, timeout=timeout
@@ -638,7 +687,7 @@ class Storage:
                 "X-Upload-Content-Length": headers.get("Content-Length", "0"),
             }
         )
-        s = self.session if not session else AioSession(session)
+        s = self._io(session)
         resp = await s.post(
             url, headers=post_headers, params=params, data=body, timeout=timeout
         )
@@ -654,7 +703,7 @@ class Storage:
         session: Session | None = None,
         timeout: int = 30,
     ) -> dict[str, Any]:
-        s = self.session if not session else AioSession(session)
+        s = self._io(session)
         original_close = stream.close
         original_position = stream.tell()
         stream.close = lambda: None  # type: ignore[assignment]
@@ -667,8 +716,10 @@ class Storage:
                     resp = await s.put(
                         session_uri, headers=headers, data=content, timeout=timeout
                     )
-                except ResponseError:
-                    if attempt == retries - 1:
+                except ResponseError as error:
+                    # Only server-side failures are retryable; a 4xx (e.g. a
+                    # failed ifGenerationMatch precondition) can never succeed.
+                    if error.response.status_code < 500 or attempt == retries - 1:
                         raise
                 else:
                     break
@@ -695,7 +746,7 @@ class Storage:
         headers = {**(headers or {}), **(await self._headers())}
         headers["Content-Type"] = "application/json"
         body = orjson.dumps(metadata)
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         resp = await s.patch(
             url, data=body, headers=headers, params=params, timeout=timeout
         )
@@ -712,11 +763,15 @@ class Storage:
     ) -> dict[str, Any]:
         url = f"{self._api_root_read}/{bucket}"
         headers = {**(headers or {}), **(await self._headers())}
-        s = AioSession(session) if session else self.session
+        s = self._io(session)
         resp = await s.get(url, headers=headers, params=params or {}, timeout=timeout)
         return resp.json()
 
     async def close(self) -> None:
+        if self._shifted is not None:
+            await self._shifted.close()
+        if self._owns_offload and self._offload is not None:
+            await self._offload.close()
         await self.session.close()
 
     async def __aenter__(self) -> Storage:

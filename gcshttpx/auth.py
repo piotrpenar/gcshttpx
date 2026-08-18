@@ -10,8 +10,9 @@ import base64
 import datetime
 import enum
 import os
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from typing import IO, Any, AnyStr
 
@@ -22,6 +23,8 @@ import orjson
 # Public exports
 __all__ = [
     "AioSession",
+    "OffloadLoop",
+    "ShiftedAioSession",
     "Token",
     "IamClient",
     "Type",
@@ -181,6 +184,87 @@ class AioSession:
     async def close(self) -> None:
         if not self._shared_session and self._session:
             await self._session.aclose()
+
+
+class OffloadLoop:
+    """
+    Owns one daemon thread running a private event loop for offloaded requests.
+
+    Coroutines submitted from any caller loop execute on the side loop, and
+    cancelling the awaiting task cancels the side-loop task, aborting the
+    in-flight request. One OffloadLoop may be shared by any number of Storage
+    instances; only its creator closes it.
+    """
+
+    def __init__(self, *, thread_name: str = "gcshttpx-offload") -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._loop.run_forever, name=thread_name, daemon=True
+        )
+        self._thread.start()
+        self._sessions: list[AioSession] = []
+        self._lock = threading.Lock()
+        self._closing = False
+        self._closed = False
+
+    def adopt(self, session: AioSession) -> None:
+        """Register a session whose side-loop client must close with this loop."""
+        with self._lock:
+            self._sessions.append(session)
+
+    async def submit(self, coro: Coroutine[Any, Any, Any]) -> Any:
+        """Run a coroutine on the side loop; cancellation propagates into it."""
+        if self._closed:
+            coro.close()
+            raise RuntimeError("OffloadLoop is closed")
+        return await asyncio.wrap_future(
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
+        )
+
+    async def close(self) -> None:
+        with self._lock:
+            if self._closing:
+                return
+            self._closing = True
+            sessions, self._sessions = self._sessions, []
+        for session in sessions:
+            await session.close()
+        self._closed = True
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        await asyncio.to_thread(self._thread.join)
+        self._loop.close()
+
+
+class ShiftedAioSession(AioSession):
+    """
+    AioSession whose requests execute on an OffloadLoop's side event loop.
+
+    Only the request funnel is overridden: every verb runs the parent
+    AioSession code verbatim, just on the side loop, so behavior, errors and
+    timeouts match the caller-loop path exactly. The underlying
+    httpx.AsyncClient is created lazily inside the side loop by the first
+    submitted request.
+    """
+
+    def __init__(
+        self,
+        offload: OffloadLoop,
+        *,
+        timeout: Timeout = 10,
+        verify_ssl: bool = True,
+    ) -> None:
+        super().__init__(None, timeout=timeout, verify_ssl=verify_ssl)
+        self._offload = offload
+        offload.adopt(self)
+
+    async def request(self, method: str, url: str, **kwargs: Any) -> Response:
+        return await self._offload.submit(super().request(method, url, **kwargs))
+
+    async def close(self) -> None:
+        if self._session is None:
+            return
+        await self._offload.submit(super().close())
+        self._session = None
 
 
 # Token logic
