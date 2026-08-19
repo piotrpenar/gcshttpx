@@ -103,6 +103,16 @@ class StreamResponse:
     async def aclose(self) -> None:
         await self._response.aclose()
 
+    @property
+    def supports_worker_reads(self) -> bool:
+        """Whether read_sync may be called from a plain worker thread."""
+        return False
+
+    def read_sync(self, size: int = -1, timeout: float | None = None) -> bytes:
+        raise NotImplementedError(
+            "read_sync requires an offloaded stream (ShiftedStreamResponse)"
+        )
+
     async def __aenter__(self) -> StreamResponse:
         return self
 
@@ -125,6 +135,10 @@ class ShiftedStreamResponse(StreamResponse):
 
     async def read(self, size: int = -1) -> bytes:
         return await self._offload.submit(super().read(size))
+
+    @property
+    def supports_worker_reads(self) -> bool:
+        return True
 
     def read_sync(self, size: int = -1, timeout: float | None = None) -> bytes:
         """Read from a plain (non-event-loop) thread, blocking until the side loop delivers the chunk."""
