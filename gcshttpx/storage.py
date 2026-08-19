@@ -126,6 +126,10 @@ class ShiftedStreamResponse(StreamResponse):
     async def read(self, size: int = -1) -> bytes:
         return await self._offload.submit(super().read(size))
 
+    def read_sync(self, size: int = -1, timeout: float | None = None) -> bytes:
+        """Read from a plain (non-event-loop) thread, blocking until the side loop delivers the chunk."""
+        return self._offload.submit_sync(super().read(size), timeout)
+
     async def aclose(self) -> None:
         await self._offload.submit(super().aclose())
 

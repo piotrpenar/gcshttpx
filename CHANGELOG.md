@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Offloaded streaming downloads: when a `Storage` runs with an `OffloadLoop`, `download_stream` opens the response on the side loop and returns a `ShiftedStreamResponse` whose `read()`/`aclose()` are submitted there, so TLS, HTTP framing and content decoding (including gzip Content-Encoding) never run on the caller's loop — only decoded chunks cross back. Explicit per-call `session=` arguments still stream on the caller's loop.
 - `AioSession.stream_request()` — open a response without reading its body; `ShiftedAioSession` runs it on its side loop and exposes the loop via the new `offload` property.
+- `ShiftedStreamResponse.read_sync()` and `OffloadLoop.submit_sync()` — blocking variants for plain worker threads, so a synchronous pipeline can consume an offloaded stream without touching any event loop.
 
 ## [0.2.0] - 2026-08-19
 

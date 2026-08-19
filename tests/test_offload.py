@@ -342,6 +342,37 @@ async def test_download_stream_rides_the_offload_loop_and_decodes_there(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_shifted_stream_read_sync_from_worker_thread(monkeypatch):
+    payload = gzip.compress(b"worker-payload")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=payload, headers={"content-encoding": "gzip"}
+        )
+
+    install_mock_client(monkeypatch, handler)
+    storage = Storage(api_root="http://test", offload=True)
+    try:
+        stream = await storage.download_stream("bkt", "obj")
+        assert isinstance(stream, ShiftedStreamResponse)
+
+        chunks: list[bytes] = []
+
+        def drain() -> None:
+            while True:
+                chunk = stream.read_sync(4)
+                if not chunk:
+                    return
+                chunks.append(chunk)
+
+        await asyncio.to_thread(drain)
+        assert b"".join(chunks) == b"worker-payload"
+        await stream.aclose()
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
 async def test_download_stream_with_explicit_session_stays_on_caller_loop(monkeypatch):
     names: list[str] = []
 

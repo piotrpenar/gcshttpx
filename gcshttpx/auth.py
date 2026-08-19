@@ -247,6 +247,13 @@ class OffloadLoop:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         )
 
+    def submit_sync(self, coro: Coroutine[Any, Any, Any], timeout: float | None = None) -> Any:
+        """Run a coroutine on the side loop from a plain (non-event-loop) thread, blocking for its result."""
+        if self._closed:
+            coro.close()
+            raise RuntimeError("OffloadLoop is closed")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
     async def close(self) -> None:
         with self._lock:
             if self._closing:
