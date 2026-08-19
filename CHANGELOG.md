@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-08-19
+
+### Added
+- Opt-in offloaded request execution: `Storage(offload=True)`, a shared `OffloadLoop` instance passed as `Storage(offload=loop)`, or the `GCSHTTPX_OFFLOAD=1` environment variable run the existing `AioSession` request logic on a dedicated side event loop in a single daemon thread, keeping the caller's event loop free of request-body, TLS and HTTP/2 framing work. The exact same code path serves both modes, so behavior, errors and timeouts match the normal path, and cancelling an awaiting task cancels the in-flight side-loop request. One `OffloadLoop` can be shared by any number of `Storage` instances; `Storage.close()` only shuts down an offload loop it created itself. Explicit per-call `session=` arguments and `download_stream` always stay on the caller's event loop, and the environment opt-in never activates for a `Storage` built on a caller-provided shared session.
+- `if_generation_match` parameter on `Storage.upload()` and `Storage.delete()`. `if_generation_match=0` makes an upload create-if-absent (HTTP 412 = object already exists), removing the need for a preflight existence check.
+- `StreamResponse.content_encoding` property exposing the response's Content-Encoding header, so stream consumers can tell whether a body fetched with gzip accept-encoding is compressed.
+
+### Changed
+- `upload(zipped=True)` gzip compression runs off the event loop via `asyncio.to_thread` when offload is enabled, instead of on the event loop.
+
+### Fixed
+- Resumable uploads forward the caller's `session` and `timeout` to the upload-initiation request; previously the initiation POST silently used the default session even when a per-call session was passed.
+- The resumable upload retry loop no longer retries 4xx responses; only 5xx responses are retried. A failed `ifGenerationMatch` precondition now surfaces immediately instead of re-sending the full body up to five times.
+- `list_buckets` sends `project` as a real query parameter. Previously it was embedded in the URL string and then dropped when request-level params replaced the URL query, failing every call.
+
 ## [0.1.6]
 
 ### Fixed

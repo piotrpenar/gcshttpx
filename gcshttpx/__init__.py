@@ -2,7 +2,7 @@
 gcshttpx: Minimal async Google Cloud Storage + Auth client on httpx (HTTP/2).
 """
 
-from .auth import AioSession, IamClient, Token, Type, decode, encode
+from .auth import AioSession, IamClient, OffloadLoop, Token, Type, decode, encode
 from .storage import Blob, Bucket, Storage, StreamResponse
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "Bucket",
     "Blob",
     "StreamResponse",
+    "OffloadLoop",
 ]
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"
