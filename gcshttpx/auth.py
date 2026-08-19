@@ -54,11 +54,13 @@ class AioSession:
         *,
         timeout: Timeout = 10,
         verify_ssl: bool = True,
+        limits: httpx.Limits | None = None,
     ) -> None:
         self._shared_session = bool(session)
         self._session = session
         self._timeout = timeout
         self._ssl = verify_ssl
+        self._limits = limits
 
     @property
     def session(self) -> Session:
@@ -68,8 +70,11 @@ class AioSession:
                 if isinstance(self._timeout, httpx.Timeout)
                 else httpx.Timeout(self._timeout)
             )
+            kwargs: dict[str, Any] = {}
+            if self._limits is not None:
+                kwargs["limits"] = self._limits
             self._session = httpx.AsyncClient(
-                timeout=timeout, verify=self._ssl, http2=True
+                timeout=timeout, verify=self._ssl, http2=True, **kwargs
             )
         return self._session
 
@@ -285,8 +290,9 @@ class ShiftedAioSession(AioSession):
         *,
         timeout: Timeout = 10,
         verify_ssl: bool = True,
+        limits: httpx.Limits | None = None,
     ) -> None:
-        super().__init__(None, timeout=timeout, verify_ssl=verify_ssl)
+        super().__init__(None, timeout=timeout, verify_ssl=verify_ssl, limits=limits)
         self._offload = offload
         offload.adopt(self)
 

@@ -394,3 +394,27 @@ async def test_download_stream_with_explicit_session_stays_on_caller_loop(monkey
         await caller_client.aclose()
         await storage.close()
         await offload.close()
+
+
+@pytest.mark.asyncio
+async def test_offload_limits_shape_the_side_loop_client():
+    offload = OffloadLoop()
+    storage = Storage(
+        api_root="http://test",
+        offload=offload,
+        offload_limits=httpx.Limits(max_connections=7, keepalive_expiry=3.0),
+    )
+    try:
+        shifted = storage._shifted
+        assert shifted is not None
+        client = await offload.submit(_client_of(shifted))
+        pool = client._transport._pool
+        assert pool._max_connections == 7
+        assert pool._keepalive_expiry == 3.0
+    finally:
+        await storage.close()
+        await offload.close()
+
+
+async def _client_of(session: AioSession) -> httpx.AsyncClient:
+    return session.session
