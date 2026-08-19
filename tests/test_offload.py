@@ -6,7 +6,7 @@ import threading
 import httpx
 import pytest
 
-from gcshttpx import OffloadLoop, Storage
+from gcshttpx import OffloadLoop, ShiftedStreamResponse, Storage
 from gcshttpx.auth import AioSession, ShiftedAioSession
 
 OFFLOAD_THREAD = "gcshttpx-offload"
@@ -311,7 +311,7 @@ async def test_upload_zipped_through_offload(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_download_stream_stays_on_loop_and_exposes_content_encoding(monkeypatch):
+async def test_download_stream_rides_the_offload_loop_and_decodes_there(monkeypatch):
     names: list[str] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -325,10 +325,41 @@ async def test_download_stream_stays_on_loop_and_exposes_content_encoding(monkey
     install_mock_client(monkeypatch, handler)
     storage = Storage(api_root="http://test", offload=True)
     try:
-        stream = await storage.download_stream("bkt", "obj")
-        assert stream.content_encoding == "gzip"
-        # Streams are consumed where iterated, so they never leave the loop.
-        assert names == [threading.current_thread().name]
-        assert names != [OFFLOAD_THREAD]
+        async with await storage.download_stream("bkt", "obj") as stream:
+            assert isinstance(stream, ShiftedStreamResponse)
+            assert stream.content_encoding == "gzip"
+            # The request, and therefore transport + decoding, ran on the side loop.
+            assert names == [OFFLOAD_THREAD]
+            got = b""
+            while True:
+                chunk = await stream.read(4)
+                if not chunk:
+                    break
+                got += chunk
+            assert got == b"payload"
     finally:
         await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_download_stream_with_explicit_session_stays_on_caller_loop(monkeypatch):
+    names: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        names.append(threading.current_thread().name)
+        return httpx.Response(200, content=b"payload")
+
+    install_mock_client(monkeypatch, handler)
+    offload = OffloadLoop()
+    caller_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    storage = Storage(api_root="http://test", offload=offload)
+    try:
+        stream = await storage.download_stream("bkt", "obj", session=caller_client)
+        assert not isinstance(stream, ShiftedStreamResponse)
+        assert names == [threading.current_thread().name]
+        assert await stream.read() == b"payload"
+        await stream.aclose()
+    finally:
+        await caller_client.aclose()
+        await storage.close()
+        await offload.close()

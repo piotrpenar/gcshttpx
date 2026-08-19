@@ -100,11 +100,34 @@ class StreamResponse:
         except StopAsyncIteration:
             return b""
 
-    async def __aenter__(self) -> Any:
-        return await self._response.__aenter__()
+    async def aclose(self) -> None:
+        await self._response.aclose()
+
+    async def __aenter__(self) -> StreamResponse:
+        return self
 
     async def __aexit__(self, *exc_info: Any) -> None:
-        await self._response.__aexit__(*exc_info)
+        await self.aclose()
+
+
+class ShiftedStreamResponse(StreamResponse):
+    """
+    StreamResponse whose httpx response lives on an OffloadLoop's side loop.
+
+    Every read and close is submitted to that loop, so TLS, framing and
+    content decoding never run on the caller's loop; only the decoded chunk
+    crosses back through the submit future.
+    """
+
+    def __init__(self, response: httpx.Response, offload: OffloadLoop) -> None:
+        super().__init__(response)
+        self._offload = offload
+
+    async def read(self, size: int = -1) -> bytes:
+        return await self._offload.submit(super().read(size))
+
+    async def aclose(self) -> None:
+        await self._offload.submit(super().aclose())
 
 
 class Storage:
@@ -551,10 +574,23 @@ class Storage:
     ) -> StreamResponse:
         url = f"{self._api_root_read}/{bucket}/o/{quote(object_name, safe='')}"
         headers = {**(headers or {}), **(await self._headers())}
-        # Streams stay on the event loop: the response is iterated where it is
-        # consumed, so it must live on the loop's AsyncClient, never a worker's.
-        s = AioSession(session) if session else self.session
-        resp = await s.get(url, headers=headers, params=params or {}, timeout=timeout)
+        # The body is never prebuffered: chunks stream lazily through read().
+        # An explicit session streams on the caller's loop; otherwise the
+        # offloaded session keeps transport and content decoding on the side
+        # loop and only decoded chunks cross back to the caller.
+        if session:
+            resp = await AioSession(session).stream_request(
+                "GET", url, headers=headers, params=params or {}, timeout=timeout
+            )
+            return StreamResponse(resp)
+        if self._shifted is not None:
+            resp = await self._shifted.stream_request(
+                "GET", url, headers=headers, params=params or {}, timeout=timeout
+            )
+            return ShiftedStreamResponse(resp, self._shifted.offload)
+        resp = await self.session.stream_request(
+            "GET", url, headers=headers, params=params or {}, timeout=timeout
+        )
         return StreamResponse(resp)
 
     async def _upload_simple(

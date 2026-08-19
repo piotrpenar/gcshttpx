@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -85,14 +86,21 @@ async def test_download_and_delete_and_metadata(tmp_path: Path):
 async def test_download_stream_reads_in_chunks():
     payload = b"0123456789"
 
+    async def chunked() -> AsyncIterator[bytes]:
+        yield payload[:5]
+        yield payload[5:]
+
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "GET" and req.url.path.endswith("/o/obj"):
-            return httpx.Response(200, content=payload)
+            # Async-iterator content: only a stream=True open leaves it unconsumed.
+            return httpx.Response(200, content=chunked())
         return httpx.Response(404)
 
     async with make_client(httpx.MockTransport(handler)) as client:
         s = Storage(session=client, api_root="http://test")
         stream = await s.download_stream("bkt", "obj")
+        # The body is opened with stream=True: nothing is prebuffered at open.
+        assert stream._response.is_stream_consumed is False
         got = b""
         while True:
             chunk = await stream.read(4)
@@ -100,6 +108,33 @@ async def test_download_stream_reads_in_chunks():
                 break
             got += chunk
         assert got == payload
+        await s.close()
+
+
+@pytest.mark.asyncio
+async def test_download_stream_context_manager_closes_response():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"abc")
+
+    async with make_client(httpx.MockTransport(handler)) as client:
+        s = Storage(session=client, api_root="http://test")
+        async with await s.download_stream("bkt", "obj") as stream:
+            assert await stream.read() == b"abc"
+        assert stream._response.is_closed
+        await s.close()
+
+
+@pytest.mark.asyncio
+async def test_download_stream_error_status_raises_and_closes():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="unavailable")
+
+    async with make_client(httpx.MockTransport(handler)) as client:
+        s = Storage(session=client, api_root="http://test")
+        with pytest.raises(httpx.HTTPStatusError) as err:
+            await s.download_stream("bkt", "obj")
+        assert err.value.response.status_code == 503
+        assert err.value.response.is_closed
         await s.close()
 
 

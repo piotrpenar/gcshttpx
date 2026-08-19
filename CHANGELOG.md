@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-08-19
+
+### Fixed
+- `download_stream` no longer buffers the whole (decoded) object body at open. It previously issued a plain request, so httpx read and content-decoded the entire body on the caller's loop before the first `read()`; it now opens the response with `stream=True` and chunks arrive lazily through `StreamResponse.read()`.
+- `StreamResponse.__aenter__`/`__aexit__` no longer call the nonexistent `httpx.Response.__aenter__`; the context manager now returns the stream and closes the response via the new `StreamResponse.aclose()`.
+
+### Added
+- Offloaded streaming downloads: when a `Storage` runs with an `OffloadLoop`, `download_stream` opens the response on the side loop and returns a `ShiftedStreamResponse` whose `read()`/`aclose()` are submitted there, so TLS, HTTP framing and content decoding (including gzip Content-Encoding) never run on the caller's loop — only decoded chunks cross back. Explicit per-call `session=` arguments still stream on the caller's loop.
+- `AioSession.stream_request()` — open a response without reading its body; `ShiftedAioSession` runs it on its side loop and exposes the loop via the new `offload` property.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added
