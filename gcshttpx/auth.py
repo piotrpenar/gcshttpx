@@ -78,6 +78,32 @@ class AioSession:
         await _raise_for_status(resp)
         return resp
 
+    async def stream_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, int | str] | None = None,
+        timeout: Timeout = 10,
+    ) -> Response:
+        """Open a response without reading its body: chunks arrive lazily via
+        ``aiter_bytes``/``aread``, so transport and content decoding happen on
+        whichever loop drives those reads, not at open time."""
+        if not isinstance(timeout, httpx.Timeout):
+            timeout = httpx.Timeout(timeout)
+        request = self.session.build_request(
+            method, url, headers=headers, params=dict(params or {}), timeout=timeout
+        )
+        resp = await self.session.send(request, stream=True)
+        if resp.status_code >= 400:
+            try:
+                await resp.aread()
+                await _raise_for_status(resp)
+            finally:
+                await resp.aclose()
+        return resp
+
     async def get(
         self,
         url: str,
@@ -221,6 +247,13 @@ class OffloadLoop:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         )
 
+    def submit_sync(self, coro: Coroutine[Any, Any, Any], timeout: float | None = None) -> Any:
+        """Run a coroutine on the side loop from a plain (non-event-loop) thread, blocking for its result."""
+        if self._closed:
+            coro.close()
+            raise RuntimeError("OffloadLoop is closed")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
     async def close(self) -> None:
         with self._lock:
             if self._closing:
@@ -259,6 +292,27 @@ class ShiftedAioSession(AioSession):
 
     async def request(self, method: str, url: str, **kwargs: Any) -> Response:
         return await self._offload.submit(super().request(method, url, **kwargs))
+
+    async def stream_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, int | str] | None = None,
+        timeout: Timeout = 10,
+    ) -> Response:
+        return await self._offload.submit(
+            super().stream_request(
+                method, url, headers=headers, params=params, timeout=timeout
+            )
+        )
+
+    @property
+    def offload(self) -> OffloadLoop:
+        """The side loop this session's responses live on; reads of a streamed
+        response must be submitted to it."""
+        return self._offload
 
     async def close(self) -> None:
         if self._session is None:
