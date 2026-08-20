@@ -20,6 +20,8 @@ import httpx
 import jwt
 import orjson
 
+from gcshttpx.transport import StreamAwareTransport
+
 # Public exports
 __all__ = [
     "AioSession",
@@ -70,11 +72,13 @@ class AioSession:
                 if isinstance(self._timeout, httpx.Timeout)
                 else httpx.Timeout(self._timeout)
             )
-            kwargs: dict[str, Any] = {}
-            if self._limits is not None:
-                kwargs["limits"] = self._limits
+            # The stream-aware transport resets abandoned h2 streams and dials
+            # past stream-saturated connections; see gcshttpx/transport.py.
             self._session = httpx.AsyncClient(
-                timeout=timeout, verify=self._ssl, http2=True, **kwargs
+                timeout=timeout,
+                verify=self._ssl,
+                http2=True,
+                transport=StreamAwareTransport(verify=self._ssl, limits=self._limits),
             )
         return self._session
 

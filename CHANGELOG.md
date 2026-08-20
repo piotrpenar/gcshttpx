@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-08-20
+
+### Fixed
+- HTTP/2 streams abandoned mid-flight (timeout, cancellation, early close of a streamed body) are now reset with RST_STREAM. httpcore releases its own stream slot on abandonment but never tells h2, so phantom streams accumulated until the connection rejected every request with `TooManyStreamsError: Max outbound streams is 100, 100 open`. Mirrors the unreleased upstream fix encode/httpcore#1098.
+
+### Added
+- Stream-aware HTTP/2 connection dialing: a connection at the peer's concurrent-stream ceiling now reports itself unavailable, so the pool dials the next connection (up to `max_connections`) instead of queueing everything on one. Slim variant of the unreleased upstream fix encode/httpcore#1088; note it only helps requests arriving while streams are actually open — a burst assigned in one pool pass still lands on one connection. Both fixes ship as `StreamAwareTransport` (with `StreamAwarePool`, `StreamAwareHTTPConnection`, `StreamAwareHTTP2Connection`), used automatically by every lazily-built `AioSession`/`ShiftedAioSession` client; httpcore is pinned to `>=1.0.9,<1.1` (and httpx to `<0.29`) because the transport overrides their internals. Drop the module and pins once upstream releases both fixes.
+
+### Changed
+- Lazily-built clients no longer honor `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`: passing an explicit transport disables httpx's environment-proxy mounts. Callers that need an egress proxy must pass their own preconfigured `session=`.
+
 ## [0.2.2] - 2026-08-19
 
 ### Fixed

@@ -308,10 +308,11 @@ wheels = [
 
 [[package]]
 name = "gcshttpx"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "httpcore" },
     { name = "httpx", extra = ["http2"] },
     { name = "orjson" },
     { name = "pyjwt" },
@@ -337,7 +338,8 @@ dev = [
 requires-dist = [
     { name = "coverage", marker = "extra == 'test'", specifier = ">=7.6.0" },
     { name = "cryptography", specifier = ">=43.0.0" },
-    { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
+    { name = "httpcore", specifier = ">=1.0.9,<1.1" },
+    { name = "httpx", extras = ["http2"], specifier = ">=0.27.0,<0.29" },
     { name = "orjson", specifier = ">=3.10.0" },
     { name = "pyjwt", specifier = ">=2.9.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },

@@ -13,7 +13,7 @@ dev-dependencies = [
 
 [project]
 name = "gcshttpx"
-version = "0.2.2"
+version = "0.2.3"
 description = "Minimal async Google Cloud Storage + Auth client built on httpx (HTTP/2)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,7 +35,12 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "httpx[http2]>=0.27.0",
+  # transport.py relies on AsyncHTTPTransport only touching self._pool
+  # (verified 0.27.0-0.28.1); re-verify before widening either pin.
+  "httpx[http2]>=0.27.0,<0.29",
+  # transport.py copies handle_async_request from httpcore 1.0.9 and overrides
+  # its h2 internals; re-verify the copy before widening this pin.
+  "httpcore>=1.0.9,<1.1",
   "orjson>=3.10.0",
   "PyJWT>=2.9.0",
   "cryptography>=43.0.0",
