@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2026-08-19
+
+### Fixed
+- Offloaded sessions honor a caller-supplied connection budget: `Storage(offload_limits=httpx.Limits(...))` shapes the side-loop client that `ShiftedAioSession` builds. Previously that client always used httpx defaults, so callers that admit work against a sized connection topology could overrun one HTTP/2 connection's outbound-stream ceiling (`LocalProtocolError: Max outbound streams is 100`).
+
 ## [0.2.1] - 2026-08-19
 
 ### Fixed

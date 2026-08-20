@@ -162,6 +162,7 @@ class Storage:
         session: Session | None = None,
         api_root: str | None = None,
         offload: bool | OffloadLoop = False,
+        offload_limits: httpx.Limits | None = None,
     ) -> None:
         self._api_is_dev, self._api_root = _init_api_root(api_root)
         self._api_root_read = f"{self._api_root}/storage/v1/b"
@@ -182,8 +183,15 @@ class Storage:
         elif offload or (session is None and os.environ.get("GCSHTTPX_OFFLOAD") == "1"):
             self._offload = OffloadLoop()
             self._owns_offload = True
+        # Offloaded transport must mirror the caller's connection budget: the side-loop
+        # client otherwise runs on httpx defaults, and a pool admitting work against a
+        # sized topology can overrun one HTTP/2 connection's outbound-stream ceiling.
         self._shifted = (
-            ShiftedAioSession(self._offload, verify_ssl=not self._api_is_dev)
+            ShiftedAioSession(
+                self._offload,
+                verify_ssl=not self._api_is_dev,
+                limits=offload_limits,
+            )
             if self._offload
             else None
         )
